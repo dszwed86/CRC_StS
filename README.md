@@ -1,0 +1,189 @@
+# Palabra S2S → OBS Bridge
+
+Desktopowa aplikacja (Windows i macOS), która tłumaczy mowę w czasie rzeczywistym przez
+[Palabra Speech-to-Speech API](https://platform.palabra.ai/docs/speech-to-speech/overview)
+i odtwarza przetłumaczony dźwięk na wirtualne urządzenie audio, które OBS Studio
+przechwytuje jako źródło na scenie.
+
+Źródłem może być mikrofon (na żywo) albo wgrany plik audio/wideo (odtwarzany i
+tłumaczony w tempie rzeczywistym, tak jakby ktoś mówił na żywo).
+
+## Wymagania
+
+- Python 3.11+
+- Klucz API Palabra — załóż go na https://platform.palabra.ai/api-keys (nowe konta
+  dostają $50 darmowego kredytu; S2S kosztuje $0.04/min)
+- Wirtualne urządzenie audio, żeby przekazać dźwięk do OBS:
+  - **Windows**: [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (bezpłatny)
+  - **macOS**: [BlackHole](https://existential.audio/blackhole/) (bezpłatny, open source; wersja 2ch wystarczy)
+
+Nie jest wymagany osobno zainstalowany `ffmpeg` — dekodowanie plików obsługuje
+pakiet `av` (PyAV), instalowany razem z resztą zależności przez pip.
+
+## Instalacja i uruchomienie
+
+**Windows** — pobierz/skopiuj cały folder projektu, a potem:
+
+1. Kliknij dwa razy **`install.bat`** (tylko za pierwszym razem — pobiera i instaluje wszystko, co potrzebne).
+2. Kliknij dwa razy **`run.bat`**, żeby uruchomić aplikację (za każdym kolejnym razem).
+
+Python nie musi być wcześniej zainstalowany — jeśli `install.bat` go nie znajdzie, spróbuje
+zainstalować go automatycznie przez `winget` (wbudowany menadżer pakietów Windows). Jeśli
+się nie uda (np. bardzo stary Windows bez wingetu), pokaże link do ręcznej instalacji.
+
+**macOS** — w Terminalu, w folderze projektu:
+
+```bash
+bash install.sh   # tylko za pierwszym razem
+bash run.sh       # za każdym kolejnym razem
+```
+
+Jeśli `install.sh` nie znajdzie Pythona, spróbuje zainstalować go przez Homebrew (jeśli jest),
+a w ostateczności pobierze oficjalny instalator z python.org i otworzy go — wtedy trzeba
+przejść przez standardowy instalator macOS (poprosi o hasło administratora).
+
+<details>
+<summary>Instalacja ręczna (dla programistów)</summary>
+
+```bash
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+pip install -r requirements.txt
+python -m app.main
+```
+
+</details>
+
+Przy pierwszym uruchomieniu kliknij **Ustawienia...** i wklej klucz API Palabra —
+zostanie zapisany lokalnie w `~/.sts_bridge/.env`. W tym samym oknie:
+
+- **Testuj klucz** — realnie sprawdza połączenie z API (bez uruchamiania płatnej sesji
+  tłumaczenia) i pokazuje, czy klucz działa, czy jest odrzucany.
+- **Otwórz panel Palabra (saldo, użycie)** — otwiera w przeglądarce
+  `platform.palabra.ai/api-keys`, gdzie widoczne jest saldo kredytów i historia użycia.
+  Palabra nie udostępnia tego w publicznym API, więc apka nie może pokazać salda
+  bezpośrednio — to najbliższe dostępne rozwiązanie.
+
+## Konfiguracja OBS
+
+1. Zainstaluj wirtualny kabel audio (patrz wyżej) i uruchom ponownie OBS, jeśli był otwarty.
+2. W OBS: **Źródła → + → Przechwytywanie wejścia audio (Audio Input Capture)**.
+3. Jako urządzenie wybierz:
+   - Windows: `CABLE Output (VB-Audio Virtual Cable)`
+   - macOS: `BlackHole 2ch`
+4. W aplikacji, w polu **Wyjście (do OBS)**, wybierz odpowiadające urządzenie
+   *wejściowe* dla tego kabla:
+   - Windows: `CABLE Input (VB-Audio Virtual Cable)`
+   - macOS: `BlackHole 2ch`
+
+   (Aplikacja automatycznie wykrywa i podpowiada urządzenie, jeśli jego nazwa
+   zawiera "CABLE" lub "BlackHole"; w przeciwnym razie wybierz je ręcznie z listy.)
+5. Miernik poziomu przy nowym źródle w OBS powinien reagować, gdy aplikacja tłumaczy mowę.
+
+## Użycie
+
+1. Wybierz źródło: **Mikrofon** (i konkretne urządzenie z listy) albo **Plik**
+   (i wskaż plik audio/wideo).
+2. Ustaw język źródłowy i docelowy (domyślnie polski → angielski) oraz opcjonalnie **Głos**:
+   - **Domyślny (auto)** — serwer sam dobiera głos.
+   - **default_low** / **default_high** — wbudowane głosy ogólne (niższy/wyższy).
+   - **Klonowanie głosu mówcy (eksperymentalne)** — tłumaczenie brzmi głosem osoby mówiącej
+     do mikrofonu/w pliku; potrzebuje ok. 10–20 sekund mowy, zanim efekt zacznie być słyszalny.
+   - **Inny (ID z portalu Palabra)...** — wpisz konkretne ID głosu skonfigurowane w
+     [app.palabra.ai/voices](https://app.palabra.ai/voices).
+
+   Palabra nie udostępnia API do pobrania listy dostępnych głosów — trzeba je najpierw
+   znaleźć/skopiować ręcznie w portalu. Żeby nie wklejać tego samego ID za każdym razem,
+   przycisk **"Zapisane głosy..."** obok pozwala raz dodać ID z własną nazwą (np. "Lektor") —
+   od tego momentu taki głos pojawia się od razu na liście wyboru, także po restarcie aplikacji.
+3. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie.
+4. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
+   przed zamknięciem połączenia.
+
+**Pauza/Wznów** działa w obu trybach — wstrzymuje tłumaczenie (zatrzymuje też naliczanie
+po stronie Palabry). W trybie **Plik** wznawia dokładnie od tego samego miejsca; w trybie
+**Mikrofon** po prostu przestaje wysyłać nowe audio, aż do wznowienia.
+
+W trybie **Plik** dodatkowo:
+
+- **Suwak pozycji** — pokazuje aktualny czas odtwarzania; przeciągnięcie i puszczenie
+  przewija tłumaczenie do wskazanego momentu pliku (pomijając to, co było przed/po).
+
+W trybie **Mikrofon** dodatkowo:
+
+- **Głośność mikrofonu** — suwak 0–100%. Przy 0% mikrofon jest wyciszony (wysyła ciszę),
+  ale sesja i tak trwa dalej (naliczanie po stronie Palabry nie jest wstrzymane — do tego
+  służy Pauza). Przydatne do szybkiego, chwilowego wyciszenia bez przerywania sesji.
+
+**Odśwież urządzenia** — przycisk obok wyboru mikrofonu ponownie skanuje sprzęt audio, więc
+mikrofon podłączony *po* uruchomieniu aplikacji też się pojawi na liście (bez restartu apki).
+Zachowuje bieżący wybór, jeśli urządzenie nadal istnieje.
+
+### Log w głównym oknie
+
+- **Pokaż w logu** — filtr (źródłowy i tłumaczenie / tylko źródłowy / tylko tłumaczenie)
+  działa "na żywo": zmiana filtra od razu przefiltrowuje już wyświetlony log, a nie tylko
+  kolejne wypowiedzi.
+- **Pokaż tagi języka ([pl]/[en])** — checkbox włączający/wyłączający prefiksy językowe
+  przy każdej linijce logu.
+- **Zapisz transkrypcję...** — zapisuje do pliku `.txt` dokładnie to, co aktualnie widać
+  w logu (czyli z uwzględnieniem wybranego filtra i ustawienia tagów).
+
+### Odczepiane okienko z tłumaczeniem (do OBS)
+
+Przycisk **"Odczep okienko z tłumaczeniem"** otwiera osobne, bezramkowe okno pokazujące
+na żywo napisy — do przechwycenia w OBS jako Window Capture, niezależnie od głównego okna
+aplikacji. Obsługa:
+
+- **Kolejne zdania tej samej wypowiedzi łączą się w jedną linijkę** — nowa linijka zaczyna
+  się dopiero po dłuższej przerwie w mówieniu (ok. 2,5 s), traktowanej jako nowa myśl.
+- **Najnowsza wypowiedź zawsze jest widoczna** — jeśli tekstu jest więcej, niż mieści się w
+  bieżącym rozmiarze okienka (albo zmniejszysz je uchwytem), widok przewija się do najnowszej
+  treści, a nie zostaje przy najstarszej.
+- **Przeciągnij** dowolne miejsce okienka lewym przyciskiem myszy, żeby je przesunąć.
+- **Uchwyt w rogu** (prawy dolny) do zmiany rozmiaru.
+- **Pozycja i rozmiar zapamiętują się automatycznie** (po ok. 0,4 s od puszczenia) i wracają
+  przy kolejnym otwarciu okienka, także po restarcie aplikacji. Jeśli zapisana pozycja okaże
+  się poza ekranem (np. po odłączeniu drugiego monitora), okienko wraca w bezpieczne miejsce
+  zamiast zniknąć bez śladu.
+- **Ustawienia wyglądu** — dostępne dwoma sposobami: przyciskiem **"Ustawienia wyglądu
+  overlay..."** w głównym oknie (zawsze aktywny — jeśli okienko nie jest jeszcze otwarte,
+  otworzy się automatycznie) albo prawym klikiem bezpośrednio na okienku. Po otwarciu
+  panelu w okienku pojawia się tekst testowy, żeby widzieć efekt zmian na żywo, nawet bez
+  trwającej sesji — po zamknięciu panelu ustawień tekst testowy znika (chyba że w
+  międzyczasie napłynęło już prawdziwe tłumaczenie — wtedy zostaje ono). **Każda zmiana
+  zapisuje się od razu na dysk** (`~/.sts_bridge/overlay_settings.json`)
+  i zostaje zapamiętana przy kolejnym uruchomieniu aplikacji. Dostępne:
+  - własny filtr (niezależny od głównego okna) — źródłowy i tłumaczenie / tylko źródłowy / tylko tłumaczenie,
+  - czcionka i jej rozmiar,
+  - kolor tekstu i kolor tła,
+  - **cień pod tekstem** — poprawia czytelność, szczególnie ważne przy przezroczystym tle,
+  - **nieprzezroczystość tła** — przy 0% tło jest w pełni przezroczyste (naprawdę, na poziomie
+    kanału alfa — w OBS zaznacz "Allow Transparency" przy źródle Window Capture), widoczny
+    jest tylko tekst.
+  - "Zawsze na wierzchu".
+- **Prawy klik → Zamknij okienko** (albo ponowne kliknięcie przycisku w głównym oknie) je zamyka.
+
+Ustawienia wyglądu resetują się przy każdym uruchomieniu aplikacji (nie są jeszcze zapamiętywane
+między sesjami).
+
+## Znane ograniczenie API
+
+Zweryfikowane testem na żywo: na starcie **każdej nowej sesji** serwer Palabra potrzebuje
+ok. 1–1.5 sekundy "rozgrzewki", zanim zacznie pewnie rozpoznawać mowę — pierwsze wypowiedziane
+słowo lub dwa tuż po kliknięciu Start mogą nie zostać przetłumaczone. Dodanie ciszy przed
+właściwą treścią tego nie naprawia (sprawdzone eksperymentalnie). To jednorazowy koszt na
+początku sesji, nie problem powtarzający się przy każdym zdaniu — przy dłuższej rozmowie/pliku
+jest pomijalny. Praktyczna rada: zacznij mówić z niewielkim naddatkiem (np. "Dzień dobry,
+zaczynamy...") zanim przejdziesz do treści, która ma się liczyć.
+
+## Poza zakresem tej wersji
+
+- Tłumaczenie na wiele języków jednocześnie (jedna sesja = jeden język docelowy na raz).
+- Integracja z Zoom (np. jako bot-interpreter na kanale Language Interpretation).
+- Miksowanie przetłumaczonego dźwięku z oryginałem.
+- Klonowanie głosu mówcy (funkcja dostępna w API Palabra, nieużywana tutaj).

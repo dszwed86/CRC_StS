@@ -1,0 +1,6 @@
+palabra-ai
+sounddevice
+numpy
+PySide6
+python-dotenv
+av
