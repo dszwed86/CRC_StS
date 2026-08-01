@@ -100,6 +100,8 @@ zostanie zapisany lokalnie w `~/.sts_bridge/.env`. W tym samym oknie:
    znaleźć/skopiować ręcznie w portalu. Żeby nie wklejać tego samego ID za każdym razem,
    przycisk **"Zapisane głosy..."** obok pozwala raz dodać ID z własną nazwą (np. "Lektor") —
    od tego momentu taki głos pojawia się od razu na liście wyboru, także po restarcie aplikacji.
+   Głos, tak jak języki i urządzenia, jest zablokowany na czas trwania sesji — zmień go przed
+   kliknięciem Start.
 3. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie.
 4. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
    przed zamknięciem połączenia.
@@ -123,6 +125,10 @@ W trybie **Mikrofon** dodatkowo:
 mikrofon podłączony *po* uruchomieniu aplikacji też się pojawi na liście (bez restartu apki).
 Zachowuje bieżący wybór, jeśli urządzenie nadal istnieje.
 
+Listy wejścia/wyjścia (Windows) pokazują każde urządzenie tylko raz — system audio potrafi
+zgłosić to samo fizyczne urządzenie kilka razy (raz na każde API dźwiękowe: MME, DirectSound,
+WASAPI, WDM-KS), więc aplikacja pokazuje tylko wersję WASAPI każdego urządzenia.
+
 ### Log w głównym oknie
 
 - **Pokaż w logu** — filtr (źródłowy i tłumaczenie / tylko źródłowy / tylko tłumaczenie)
@@ -132,6 +138,9 @@ Zachowuje bieżący wybór, jeśli urządzenie nadal istnieje.
   przy każdej linijce logu.
 - **Zapisz transkrypcję...** — zapisuje do pliku `.txt` dokładnie to, co aktualnie widać
   w logu (czyli z uwzględnieniem wybranego filtra i ustawienia tagów).
+- **Wyczyść transkrypcję** — jedyny sposób na wyczyszczenie logu, historii i okienka overlay.
+  Kliknięcie Start/Stop **nie** czyści ich automatycznie — kolejne sesje w ramach tego samego
+  uruchomienia apki doklejają się do tego, co już było, dopóki nie klikniesz tego przycisku.
 
 ### Odczepiane okienko z tłumaczeniem (do OBS)
 
@@ -168,8 +177,13 @@ aplikacji. Obsługa:
   - "Zawsze na wierzchu".
 - **Prawy klik → Zamknij okienko** (albo ponowne kliknięcie przycisku w głównym oknie) je zamyka.
 
-Ustawienia wyglądu resetują się przy każdym uruchomieniu aplikacji (nie są jeszcze zapamiętywane
-między sesjami).
+## Szybkość tłumaczenia
+
+Aplikacja jest skonfigurowana pod niższe opóźnienie: tłumaczy fragmenty zdań na bieżąco, zanim
+mówca skończy mówić (zamiast czekać na całe, potwierdzone zdanie), i uznaje zdanie za skończone
+po 0,5 s ciszy (zamiast domyślnych 0,7 s). Kompromis: wcześnie pokazane tłumaczenie czasem
+zmienia się po usłyszeniu całości zdania, a mówienie z dłuższymi pauzami w środku zdania może
+skutkować jego przedwczesnym podzieleniem.
 
 ## Znane ograniczenie API
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sys
 import threading
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
@@ -308,6 +309,23 @@ class SessionWorker(QObject):
         return self._file_source.total_ms if self._file_source else 0.0
 
     def start(self) -> None:
+        # WASAPI (the audio backend selected for every device on Windows --
+        # see audio_io._preferred_hostapi_index) is COM-based and requires
+        # COM to be initialized on whichever thread uses it. This thread
+        # never did that, which previously didn't matter (MME devices don't
+        # need COM), but once device listing switched to WASAPI-only, opening
+        # *any* device here started failing with "Unanticipated host error
+        # ... WdmSyncIoctl ... Windows WDM-KS error 0" -- confirmed by
+        # reproducing it with a bare thread opening the same device, and
+        # confirming CoInitializeEx() fixes it.
+        com_initialized = False
+        if sys.platform == "win32":
+            import ctypes
+
+            COINIT_APARTMENTTHREADED = 0x2
+            hr = ctypes.windll.ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            com_initialized = hr >= 0  # S_OK or S_FALSE (already initialized)
+
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
@@ -352,6 +370,8 @@ class SessionWorker(QObject):
             with contextlib.suppress(Exception):
                 self._loop.run_until_complete(asyncio.sleep(0.2))
             self._loop.close()
+            if com_initialized:
+                ctypes.windll.ole32.CoUninitialize()
             self.finished.emit()
 
     def stop(self) -> None:
@@ -381,6 +401,9 @@ class SessionWorker(QObject):
 
     def seek(self, position_ms: float) -> None:
         self._call_on_loop("request_seek", position_ms)
+
+    def change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
+        self._call_on_loop("request_change_voice", voice_id, voice_cloning)
 
     def set_mic_gain(self, gain: float) -> None:
         # MicStream.set_gain() is a plain thread-safe attribute write (no asyncio
@@ -497,9 +520,11 @@ class MainWindow(QMainWindow):
 
         self.voice_combo = QComboBox()
         self.voice_combo.currentIndexChanged.connect(self._on_voice_mode_changed)
+        self.voice_combo.currentIndexChanged.connect(self._on_voice_selection_changed)
         self.voice_custom_edit = QLineEdit()
         self.voice_custom_edit.setPlaceholderText("ID głosu z app.palabra.ai/voices")
         self.voice_custom_edit.setVisible(False)
+        self.voice_custom_edit.editingFinished.connect(self._on_voice_custom_edit_finished)
         self.manage_voices_btn = QPushButton("Zapisane głosy...")
         self.manage_voices_btn.clicked.connect(self._on_manage_voices)
         self._rebuild_voice_combo()
@@ -574,6 +599,9 @@ class MainWindow(QMainWindow):
         self.save_transcript_btn = QPushButton("Zapisz transkrypcję...")
         self.save_transcript_btn.clicked.connect(self._on_save_transcript)
         overlay_row.addWidget(self.save_transcript_btn)
+        self.clear_transcript_btn = QPushButton("Wyczyść transkrypcję")
+        self.clear_transcript_btn.clicked.connect(self._on_clear_transcript)
+        overlay_row.addWidget(self.clear_transcript_btn)
         root.addLayout(overlay_row)
 
         self.log = QPlainTextEdit()
@@ -582,6 +610,14 @@ class MainWindow(QMainWindow):
 
         self.resize(600, 500)
 
+        # Voice pickers are locked during a session again: live-switching (via
+        # SessionWorker.change_voice -> set_task()) is implemented and tested
+        # correctly in isolation, but changing voice mid-stream (file mode)
+        # kept triggering the server's "arriving faster than real-time"
+        # warning despite several fix attempts, and the exact server-side
+        # mechanism couldn't be confirmed. Disabled here rather than ripped
+        # out -- remove voice_combo/voice_custom_edit from this list again to
+        # re-enable live switching if that gets root-caused later.
         self._config_widgets = [
             self.settings_btn,
             self.mode_combo,
@@ -606,6 +642,42 @@ class MainWindow(QMainWindow):
             return  # combo temporarily empty mid-rebuild
         kind, _ = data
         self.voice_custom_edit.setVisible(kind == "custom")
+
+    def _resolve_selected_voice(self) -> tuple[str | None, bool] | None:
+        """(voice_id, voice_cloning) for the current picker state, or None if
+        "custom" is selected but the ID field is empty."""
+        voice_kind, voice_preset_id = self.voice_combo.currentData()
+        if voice_kind == "id":
+            return voice_preset_id, False
+        if voice_kind == "clone":
+            return None, True
+        if voice_kind == "custom":
+            voice_id = self.voice_custom_edit.text().strip()
+            return (voice_id, False) if voice_id else None
+        return None, False  # "auto"
+
+    def _on_voice_selection_changed(self, _index: int) -> None:
+        # Live voice switching mid-session (see SessionWorker.change_voice) --
+        # "custom" is handled by _on_voice_custom_edit_finished instead, since
+        # there's no single ID to apply until the user finishes typing it.
+        if self._worker is None:
+            return
+        kind, _ = self.voice_combo.currentData()
+        if kind == "custom":
+            return
+        resolved = self._resolve_selected_voice()
+        if resolved is not None:
+            self._worker.change_voice(*resolved)
+
+    def _on_voice_custom_edit_finished(self) -> None:
+        if self._worker is None:
+            return
+        kind, _ = self.voice_combo.currentData()
+        if kind != "custom":
+            return
+        resolved = self._resolve_selected_voice()
+        if resolved is not None:
+            self._worker.change_voice(*resolved)
 
     def _rebuild_voice_combo(self) -> None:
         current = self.voice_combo.currentData() if self.voice_combo.count() else None
@@ -707,22 +779,20 @@ class MainWindow(QMainWindow):
         source_lang = self.source_lang_combo.currentData()
         target_lang = self.target_lang_combo.currentData()
 
-        voice_kind, voice_preset_id = self.voice_combo.currentData()
-        voice_id = None
-        voice_cloning = False
-        if voice_kind == "id":
-            voice_id = voice_preset_id
-        elif voice_kind == "clone":
-            voice_cloning = True
-        elif voice_kind == "custom":
-            voice_id = self.voice_custom_edit.text().strip()
-            if not voice_id:
-                QMessageBox.warning(self, "Brak ID głosu", "Podaj ID głosu (z app.palabra.ai/voices) albo wybierz inną opcję.")
-                return
+        resolved_voice = self._resolve_selected_voice()
+        if resolved_voice is None:
+            QMessageBox.warning(self, "Brak ID głosu", "Podaj ID głosu (z app.palabra.ai/voices) albo wybierz inną opcję.")
+            return
+        voice_id, voice_cloning = resolved_voice
 
-        self.log.clear()
+        # Log/history/overlay deliberately survive across Start/Stop -- they
+        # only reset via the explicit "Wyczyść transkrypcję" button now, so a
+        # sequence of short takes doesn't wipe out everything said so far.
+        # _partial_line_active is still reset: it's just bookkeeping for
+        # whether the very next event should replace the log's last line or
+        # start a new one, and a fresh session's first event should always
+        # start a new line even if the previous one ended on a partial.
         self._partial_line_active = False
-        self._transcript_history = []
         worker = SessionWorker(
             api_key=creds.api_key,
             source_lang=source_lang,
@@ -884,6 +954,13 @@ class MainWindow(QMainWindow):
                 f.write(content)
         except OSError as e:
             QMessageBox.critical(self, "Błąd zapisu", f"Nie udało się zapisać pliku: {e}")
+
+    def _on_clear_transcript(self) -> None:
+        self.log.clear()
+        self._transcript_history = []
+        self._partial_line_active = False
+        if self._overlay is not None:
+            self._overlay.clear()
 
     def _replace_last_log_line(self, text: str) -> None:
         cursor = self.log.textCursor()

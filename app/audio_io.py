@@ -25,6 +25,7 @@ CHUNK_SAMPLES = int(RATE * CHUNK_MS / 1000)
 CHUNK_BYTES = CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
 BYTES_PER_MS = RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
+MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
 
 
 @dataclass
@@ -46,19 +47,50 @@ def rescan_devices() -> None:
     sd._initialize()
 
 
+def _preferred_hostapi_index() -> int | None:
+    """On Windows, PortAudio reports the same physical device once per host
+    API (MME, DirectSound, WASAPI, WDM-KS) -- the exact same microphone can
+    show up 3-4 times in the device list. WASAPI is the modern API and
+    already covers every real device (including virtual cables), so when
+    it's available only its devices are listed. Platforms with just one
+    host API (e.g. macOS Core Audio) are unaffected -- this returns None
+    and no filtering happens.
+    """
+    for i, api in enumerate(sd.query_hostapis()):
+        if api["name"] == "Windows WASAPI":
+            return i
+    return None
+
+
+def _wasapi_extra_settings() -> "sd.WasapiSettings | None":
+    """auto_convert lets WASAPI insert its own sample-rate/channel converter
+    for devices whose native format doesn't match our fixed 24 kHz mono PCM.
+    MME used to handle this silently, but since device listing now only
+    shows WASAPI devices (see _preferred_hostapi_index), opening a device
+    whose mixer isn't already at 24 kHz would otherwise fail outright with
+    "Invalid sample rate" -- confirmed with this app's own real microphone,
+    which opened fine under MME but not under WASAPI without this.
+    """
+    if _preferred_hostapi_index() is not None:  # WASAPI available -- i.e. Windows
+        return sd.WasapiSettings(auto_convert=True)
+    return None
+
+
 def list_input_devices() -> list[DeviceInfo]:
+    preferred = _preferred_hostapi_index()
     return [
         DeviceInfo(i, d["name"], d["max_input_channels"], d["max_output_channels"])
         for i, d in enumerate(sd.query_devices())
-        if d["max_input_channels"] > 0
+        if d["max_input_channels"] > 0 and (preferred is None or d["hostapi"] == preferred)
     ]
 
 
 def list_output_devices() -> list[DeviceInfo]:
+    preferred = _preferred_hostapi_index()
     return [
         DeviceInfo(i, d["name"], d["max_input_channels"], d["max_output_channels"])
         for i, d in enumerate(sd.query_devices())
-        if d["max_output_channels"] > 0
+        if d["max_output_channels"] > 0 and (preferred is None or d["hostapi"] == preferred)
     ]
 
 
@@ -92,6 +124,7 @@ class MicStream:
             dtype="int16",
             device=device,
             callback=self._on_audio,
+            extra_settings=_wasapi_extra_settings(),
         )
 
     def _on_audio(self, indata, frames, time_info, status) -> None:
@@ -123,7 +156,7 @@ class MicStream:
         self._gain = max(0.0, min(1.0, gain))
 
     async def chunks(self) -> AsyncIterator[bytes]:
-        """Yields fixed-size 320 ms PCM chunks, waiting for the mic as needed."""
+        """Yields fixed-size 320 ms PCM chunks, paced to real time."""
         # The audio callback starts filling self._q as soon as __enter__() runs
         # (i.e. as soon as the device opens), which is well before this generator
         # is first iterated -- that only happens once the session has finished
@@ -137,6 +170,17 @@ class MicStream:
             except queue.Empty:
                 break
         pending = b""
+        # Explicit real-time pacing (like FileStream), not just "trust the mic
+        # callback's own rate": relying on the callback alone wasn't enough --
+        # WASAPI's auto_convert resampling (needed since our fixed 24 kHz
+        # doesn't match most devices' native rate) can hand over audio very
+        # slightly faster than true real-time, which adds up over a session
+        # into a persistent "arriving faster than real-time" warning, not just
+        # a one-off burst after a stall (that's the backlog cap below, a
+        # separate concern: a stall makes chunks late, a fast callback makes
+        # them early -- both are handled here, independently).
+        anchor = time.monotonic()
+        anchor_ms = 0.0
         while True:
             if self._paused.is_set():
                 # Drain and discard everything queued so far, not just one item:
@@ -152,13 +196,50 @@ class MicStream:
                         break
                 pending = b""
                 await asyncio.sleep(0.05)
+                anchor = time.monotonic()  # resync -- don't try to "catch up" on paused time
+                anchor_ms = 0.0
                 continue
             try:
                 pending += self._q.get_nowait()
             except queue.Empty:
                 await asyncio.sleep(0.005)
                 continue
+            # Drain whatever else is already queued in this same pass, then
+            # cap the result: something can briefly stall consumption even
+            # outside of an explicit pause (a network hiccup, or set_task()
+            # sharing the same websocket send when the voice is changed
+            # mid-session) while the mic callback keeps pushing in real
+            # time. Draining one item per loop iteration would still replay
+            # that backlog as a burst of near-instant yields once caught up
+            # -- capping it here means at most one chunk's worth of stale
+            # audio gets sent late, instead of everything piled up during
+            # the stall.
+            while True:
+                try:
+                    pending += self._q.get_nowait()
+                except queue.Empty:
+                    break
+            if len(pending) > MAX_MIC_BACKLOG_BYTES:
+                pending = pending[-CHUNK_BYTES:]
+                anchor = time.monotonic()  # we just dropped a backlog -- resync instead of pacing off a stale anchor
+                anchor_ms = 0.0
             while len(pending) >= CHUNK_BYTES:
+                anchor_ms += CHUNK_MS
+                delay = anchor + anchor_ms / 1000 - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                else:
+                    # Fell behind real time (a scheduling hiccup, GC pause,
+                    # anything) -- resync instead of racing to catch up.
+                    # Without this, anchor/anchor_ms never recover: every
+                    # later chunk keeps computing delay <= 0 too (anchor_ms
+                    # keeps climbing while anchor stays fixed in the past),
+                    # so pacing silently stops for the rest of the session --
+                    # exactly the persistent, worsening "faster than
+                    # real-time" this pacing was meant to prevent. Same fix
+                    # FileStream already uses for the same reason.
+                    anchor = time.monotonic()
+                    anchor_ms = 0.0
                 yield self._apply_gain(pending[:CHUNK_BYTES])
                 pending = pending[CHUNK_BYTES:]
 
@@ -265,6 +346,7 @@ class OutputSink:
             dtype="int16",
             device=device,
             callback=self._on_playback,
+            extra_settings=_wasapi_extra_settings(),
         )
 
     def _on_playback(self, outdata, frames, time_info, status) -> None:

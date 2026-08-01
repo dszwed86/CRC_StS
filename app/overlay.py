@@ -5,8 +5,6 @@ can be made fully transparent so only the text shows over the video.
 
 from __future__ import annotations
 
-import time
-
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
@@ -34,6 +32,9 @@ from .translation_session import TranscriptEvent
 
 MAX_LINES = 4  # keeps this a compact "recent captions" strip, not a full scrollback
 PARAGRAPH_GAP_SECONDS = 2.5  # pause between sentences long enough to start a new line
+MAX_PARAGRAPH_CHARS = 400  # merging still stops here even if pauses stay short --
+# otherwise a speaker who never pauses long enough would grow one line without
+# bound for as long as the session runs (found via a simulated 2h stress test)
 SAMPLE_TEXT = "To jest przykładowy tekst — tak będzie wyglądać napis."
 
 DEFAULT_SETTINGS = {
@@ -133,6 +134,7 @@ class OverlayWindow(QWidget):
         # on_transcript() for how these are used together.
         self._paragraph_base = ""  # finalized text of the line currently being built
         self._last_final_time: float | None = None
+        self._last_final_is_translation: bool | None = None
         self._merging = False  # locked in per-sentence so a slow-to-finalize
         # sentence's growing text doesn't visually "un-merge" mid-way through
 
@@ -247,6 +249,7 @@ class OverlayWindow(QWidget):
             self._showing_sample = False
             self._paragraph_base = ""
             self._last_final_time = None
+            self._last_final_is_translation = None
             self._render()
 
     def _apply_style(self) -> None:
@@ -277,8 +280,14 @@ class OverlayWindow(QWidget):
             self._showing_sample = False
             self._paragraph_base = ""
             self._last_final_time = None
+            self._last_final_is_translation = None
 
-        now = time.monotonic()
+        # The event's own creation time, not time.monotonic() captured here:
+        # replaying history (e.g. backfilling an overlay opened mid-session)
+        # calls this in a tight loop with no real delay between calls, which
+        # would otherwise make unrelated sentences spoken minutes apart look
+        # like they happened back-to-back and get wrongly merged.
+        now = event.timestamp
         # Whether this event is the first fragment of a new sentence (as
         # opposed to a further-along partial repeat of one already growing).
         # The merge/no-merge decision below is made only at that point and
@@ -290,7 +299,14 @@ class OverlayWindow(QWidget):
             self._merging = (
                 bool(self._lines)
                 and self._last_final_time is not None
+                # Never merge a source transcript onto the same line as a
+                # translation (or vice versa): with the overlay filter set to
+                # "both", the two normally arrive close together in time
+                # (well under PARAGRAPH_GAP_SECONDS), which without this
+                # check concatenated the two languages onto one caption line.
+                and self._last_final_is_translation == event.is_translation
                 and (now - self._last_final_time) < PARAGRAPH_GAP_SECONDS
+                and len(self._paragraph_base) < MAX_PARAGRAPH_CHARS
             )
 
         text = f"{self._paragraph_base} {event.text}" if self._merging else event.text
@@ -302,6 +318,7 @@ class OverlayWindow(QWidget):
         if event.is_final:
             self._paragraph_base = text
             self._last_final_time = now
+            self._last_final_is_translation = event.is_translation
         self._partial_line_active = not event.is_final
         del self._lines[:-MAX_LINES]
         self._render()
@@ -320,6 +337,7 @@ class OverlayWindow(QWidget):
         self._showing_sample = False
         self._paragraph_base = ""
         self._last_final_time = None
+        self._last_final_is_translation = None
         self._render()
 
     # --- window chrome: drag-to-move + right-click settings --------------

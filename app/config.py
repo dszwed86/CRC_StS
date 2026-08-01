@@ -42,15 +42,40 @@ def save_credentials(api_key: str, region: str = DEFAULT_REGION) -> None:
     set_key(str(ENV_PATH), "PALABRA_REGION", region)
 
 
+_OVERLAY_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {
+    "filter_mode": str,
+    "font_family": str,
+    "font_size": (int, float),
+    "font_color": str,
+    "bg_color": str,
+    "opacity_percent": (int, float),
+    "shadow_enabled": bool,
+    "always_on_top": bool,
+    "pos_x": (int, float),
+    "pos_y": (int, float),
+    "width": (int, float),
+    "height": (int, float),
+}
+
+
 def load_overlay_settings() -> dict[str, Any]:
     """Reads saved overlay appearance settings from disk, or {} if none/corrupt yet."""
     if not OVERLAY_SETTINGS_PATH.exists():
         return {}
     try:
         data = json.loads(OVERLAY_SETTINGS_PATH.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    # A field with the wrong type (e.g. a hand-edited file) would otherwise
+    # crash OverlayWindow.__init__ (e.g. QFont(family, "not-a-number")) --
+    # drop just that field so the app falls back to its default instead.
+    return {
+        k: v
+        for k, v in data.items()
+        if k not in _OVERLAY_SETTINGS_TYPES or isinstance(v, _OVERLAY_SETTINGS_TYPES[k])
+    }
 
 
 def save_overlay_settings(settings: dict[str, Any]) -> None:

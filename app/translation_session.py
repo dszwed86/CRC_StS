@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import threading
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Protocol
 
@@ -41,6 +43,12 @@ class TranscriptEvent:
     language: str
     is_translation: bool
     is_final: bool
+    # Real creation time (process-monotonic), not wall clock. Lets the overlay's
+    # paragraph-merging use the ORIGINAL timing between sentences even when
+    # events are replayed later (e.g. backfilling an overlay opened mid-session)
+    # rather than the replay time, which would otherwise make unrelated
+    # sentences spoken minutes apart look like they happened back-to-back.
+    timestamp: float = field(default_factory=time.monotonic)
 
 
 class TranslationRunner:
@@ -92,6 +100,16 @@ class TranslationRunner:
         asyncio.create_task(self._do_pause())
 
     async def _do_pause(self) -> None:
+        # stop() may have already run by the time this (queued via
+        # call_soon_threadsafe from the GUI thread) actually executes -- e.g.
+        # the user clicked Pauza then Stop in quick succession. stop() always
+        # resumes the source before setting self._stop precisely so a paused
+        # source can't block feed() forever, but if we pause it AFTER that,
+        # nothing ever resumes it again and feed() hangs (a paused source's
+        # chunks() never yields, which is the only place feed() re-checks
+        # self._stop). Bail out here instead of undoing stop()'s resume().
+        if self._stop.is_set():
+            return
         try:
             self._source.pause()
             await self._session.pause()
@@ -136,6 +154,45 @@ class TranslationRunner:
         except Exception as e:
             self._on_error(f"Nieoczekiwany błąd: {e}")
 
+    def request_change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
+        """Switches the TTS voice for the rest of the session via set_task()
+        ("update settings on the fly" per the SDK) -- no reconnect needed.
+        Same threading rule as request_pause/request_seek.
+        """
+        if self._session is None:
+            return
+        asyncio.create_task(self._do_change_voice(voice_id, voice_cloning))
+
+    async def _do_change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
+        # Briefly pause the source (not the reported SessionState -- the UI
+        # doesn't need to show "Wstrzymano" for this) around the set_task()
+        # call: the server likely reinitializes its speech-generation
+        # pipeline for the new voice, and continuing to stream audio while
+        # that happens showed up as a spurious "arriving faster than
+        # real-time" warning even though our own send pacing measured
+        # correctly throughout. Pausing/resuming the source also makes it
+        # resync its own pacing anchor afterwards (already the case for both
+        # MicStream and FileStream), instead of racing to catch up.
+        pausable = hasattr(self._source, "pause") and hasattr(self._source, "resume")
+        if pausable:
+            self._source.pause()
+        try:
+            task = copy.deepcopy(self._session.task)
+            speech_gen: dict[str, object] = {}
+            if voice_cloning:
+                speech_gen["voice_cloning"] = True
+            elif voice_id is not None:
+                speech_gen["voice_id"] = voice_id
+            task["pipeline"]["translations"][0]["speech_generation"] = speech_gen
+            await self._session.set_task(task)
+        except PalabraError as e:
+            self._on_error(f"Błąd: {e}")
+        except Exception as e:
+            self._on_error(f"Nieoczekiwany błąd: {e}")
+        finally:
+            if pausable:
+                self._source.resume()
+
     async def run(self) -> None:
         self._on_state(SessionState.CONNECTING)
         try:
@@ -144,6 +201,15 @@ class TranslationRunner:
                 targets=[self._target_lang],
                 voice_id=self._voice_id,
                 voice_cloning=self._voice_cloning,
+                # Lower perceived latency: translate partial (still-forming)
+                # transcriptions instead of waiting for each segment to be
+                # fully confirmed, and confirm a segment after a shorter
+                # silence gap (server default 0.7s). Trade-off: an earlier
+                # translation can occasionally get revised once the full
+                # segment is heard, and a speaker who pauses mid-sentence
+                # more than ~0.5s may see it split a bit eagerly.
+                translate_partials=True,
+                silence_threshold=0.5,
             ) as session:
                 self._session = session
                 self._on_state(SessionState.RUNNING)
