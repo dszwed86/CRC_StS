@@ -20,12 +20,26 @@ fi
 # dependencies don't support yet.
 PYTHON_BIN="${PYTHON_BIN:-}"
 
+# A python3 that exists but is too old doesn't count as "found" -- macOS
+# ships its own /usr/bin/python3 placeholder stuck around 3.9 on every
+# machine, present or not depending on whether Xcode Command Line Tools
+# were ever installed, so "python3 exists" alone says nothing about whether
+# it's usable. Auto-installing a good one below must still kick in for this
+# case exactly like the "nothing found at all" case, not bail out to a
+# manual-install message.
 if [ -z "$PYTHON_BIN" ] && command -v python3 &>/dev/null; then
-    PYTHON_BIN="python3"
+    if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+        PYTHON_BIN="python3"
+    fi
 fi
 
 if [ -z "$PYTHON_BIN" ]; then
-    echo "Nie znaleziono Pythona 3 na tym komputerze - próbuję zainstalować automatycznie..."
+    if command -v python3 &>/dev/null; then
+        FOUND_OLD_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
+        echo "Znaleziony Python ($FOUND_OLD_VERSION) jest za stary (potrzeba co najmniej 3.11) - próbuję zainstalować nowszy automatycznie..."
+    else
+        echo "Nie znaleziono Pythona 3 na tym komputerze - próbuję zainstalować automatycznie..."
+    fi
     echo
     if command -v brew &>/dev/null; then
         # A specific, long-supported version, not Homebrew's plain "python"
@@ -66,18 +80,6 @@ if [ -z "$PYTHON_BIN" ]; then
         echo "Zainstaluj Pythona ręcznie z https://www.python.org/downloads/"
         exit 1
     fi
-fi
-
-# A too-old python3 already present on the system (e.g. left over from an
-# earlier attempt) fails in confusing ways deep inside pip's dependency
-# resolution instead of with a clear message -- catch it here instead.
-PY_OK=$("$PYTHON_BIN" -c 'import sys; print(1 if sys.version_info >= (3, 11) else 0)')
-if [ "$PY_OK" != "1" ]; then
-    PY_FOUND=$("$PYTHON_BIN" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
-    echo "Znaleziony Python ($PY_FOUND, $PYTHON_BIN) jest za stary - potrzeba co najmniej 3.11."
-    echo "Zainstaluj nowszy z https://www.python.org/downloads/ (lub 'brew install python@3.12')"
-    echo "i uruchom ponownie: bash install.sh"
-    exit 1
 fi
 
 if [ ! -d ".venv" ]; then
