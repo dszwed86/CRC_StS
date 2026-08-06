@@ -48,6 +48,13 @@ Najprościej: pobierz gotową aplikację ze strony wydań —
 
    (Samo kliknięcie prawym przyciskiem → Otwórz, opisywane jako standardowy sposób obejścia
    Gatekeepera, na nowszych wersjach macOS — Sonoma/Sequoia — czasem już nie wystarcza.)
+3. Przy **pierwszym** kliknięciu Start macOS zapyta o dostęp do mikrofonu — kliknij **Zezwól**.
+   Znany jednorazowy przypadek: jeśli mimo kliknięcia "Zezwól" tłumaczenie i tak nie słyszy mowy
+   (a inne aplikacje w tym momencie też nie widzą mikrofonu, dopóki CRC Translator działa) —
+   zamknij aplikację całkowicie i uruchom ją ponownie. To macOS-owa osobliwość przy zupełnie
+   pierwszym przyznaniu zgody na mikrofon (strumień otwarty tuż przed decyzją systemu zostaje
+   "zawieszony" na czas życia tego konkretnego procesu); każde kolejne uruchomienie już działa
+   normalnie od razu, bez tego kroku.
 
 Każda kolejna sesja to już tylko podwójne kliknięcie w pobrany plik — nic się nie instaluje
 ani nie pobiera przy starcie.

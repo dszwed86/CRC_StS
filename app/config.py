@@ -84,12 +84,27 @@ def save_overlay_settings(settings: dict[str, Any]) -> None:
     OVERLAY_SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
+# Shipped with the app so a fresh install already has a useful starting
+# list instead of an empty one -- only used the very first time (before the
+# user's own ~/.sts_bridge/saved_voices.json exists); any add/remove from
+# then on is stored in that local file like normal, independently per machine.
+DEFAULT_SAVED_VOICES: list[dict[str, str]] = [
+    {"name": "EngFem1", "voice_id": "36B6DAF6-4792-4106-A0AD-0069F582E7F8"},
+    {"name": "EngMale1", "voice_id": "7fa1dafd-84e4-4e30-8e5b-7295edbc152e"},
+    {"name": "EngMale2", "voice_id": "671e3dd0-cb38-448d-99f2-63300e9c5a67"},
+    {"name": "EngMale3", "voice_id": "f1d62423-085e-4694-91cd-4d04085a2fc5"},
+    {"name": "EngMale4", "voice_id": "fb4529b8-dd11-48f2-a10b-50b1e349ef4c"},
+    {"name": "PolMale", "voice_id": "0c3adf42-f1f6-430b-a18c-7d83e141abd6"},
+    {"name": "PolFemale", "voice_id": "d319b3e8-ab60-4146-af21-d66f5faa5a24"},
+]
+
+
 def load_saved_voices() -> list[dict[str, str]]:
     """Reads the user's named voice_id presets (Palabra has no API to list
     voices, so IDs are copied by hand from app.palabra.ai/voices and saved
     here under a friendly name so they don't need re-pasting every time)."""
     if not SAVED_VOICES_PATH.exists():
-        return []
+        return [dict(v) for v in DEFAULT_SAVED_VOICES]
     try:
         data = json.loads(SAVED_VOICES_PATH.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
