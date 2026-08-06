@@ -16,7 +16,7 @@ echo "Buduję CRC Translator.app (to zajmie chwilę)..."
 # bundle can't be a single file, and forcing it clashes with Gatekeeper.
 # The user experience is identical either way (still one CRC Translator.app
 # icon to double-click) -- only the internal layout differs.
-.venv/bin/python -m PyInstaller --name "CRC Translator" --windowed --onedir --icon "assets/icon.icns" --noconfirm launcher.py
+.venv/bin/python -m PyInstaller --name "CRC Translator" --windowed --onedir --icon "assets/icon.icns" --add-data "assets/icon.png:assets" --noconfirm launcher.py
 
 APP_PATH="dist/CRC Translator.app"
 PLIST="$APP_PATH/Contents/Info.plist"

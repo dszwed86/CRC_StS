@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import certifi
 
@@ -15,13 +16,23 @@ import certifi
 # step by hand.
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .gui import MainWindow
 
 
+def _icon_path() -> str:
+    # PyInstaller extracts bundled data files under sys._MEIPASS at runtime
+    # (see the --add-data flags in windows/build.bat and mac/build.sh);
+    # running from source, assets/ is just a normal sibling of app/.
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return str(base / "assets" / "icon.png")
+
+
 def main() -> None:
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(_icon_path()))
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

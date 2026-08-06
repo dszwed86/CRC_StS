@@ -18,7 +18,7 @@ if errorlevel 1 (
 )
 
 echo Buduje "CRC Translator.exe" (to zajmie chwile)...
-".venv\Scripts\python.exe" -m PyInstaller --name "CRC Translator" --windowed --onefile --icon "assets\icon.ico" --noconfirm launcher.py
+".venv\Scripts\python.exe" -m PyInstaller --name "CRC Translator" --windowed --onefile --icon "assets\icon.ico" --add-data "assets\icon.png;assets" --noconfirm launcher.py
 if errorlevel 1 (
     echo Budowanie nie powiodlo sie. Zobacz komunikat bledu powyzej.
     pause
