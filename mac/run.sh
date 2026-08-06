@@ -1,5 +1,5 @@
 #!/bin/bash
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 if [ ! -f ".venv/bin/python" ]; then
     echo "Aplikacja nie jest jeszcze zainstalowana. Uruchom najpierw: bash install.sh"

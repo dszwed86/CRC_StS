@@ -22,7 +22,11 @@ pakiet `av` (PyAV), instalowany razem z resztą zależności przez pip.
 
 ## Instalacja i uruchomienie
 
-**Windows** — pobierz/skopiuj cały folder projektu, a potem:
+Skrypty startowe są podzielone folderami wg systemu — na Windows wchodzisz do folderu
+`windows`, na macOS do folderu `mac`, i tam zostajesz (żadnych dodatkowych plików gdzie
+indziej w projekcie nie trzeba dotykać).
+
+**Windows** — pobierz/skopiuj cały folder projektu, a potem w folderze `windows`:
 
 1. Kliknij dwa razy **`install.bat`** (tylko za pierwszym razem — pobiera i instaluje wszystko, co potrzebne).
 2. Kliknij dwa razy **`run.bat`**, żeby uruchomić aplikację (za każdym kolejnym razem).
@@ -31,7 +35,7 @@ Python nie musi być wcześniej zainstalowany — jeśli `install.bat` go nie zn
 zainstalować go automatycznie przez `winget` (wbudowany menadżer pakietów Windows). Jeśli
 się nie uda (np. bardzo stary Windows bez wingetu), pokaże link do ręcznej instalacji.
 
-**macOS** — pobierz/skopiuj cały folder projektu, a potem w Finderze:
+**macOS** — pobierz/skopiuj cały folder projektu, a potem w folderze `mac`, w Finderze:
 
 1. Kliknij dwa razy **`Zainstaluj.command`** (tylko za pierwszym razem — pobiera i instaluje
    wszystko, co potrzebne; nie trzeba w ogóle otwierać Terminala ręcznie).

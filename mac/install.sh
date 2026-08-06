@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # Building some Python packages from source (e.g. "av", when no prebuilt
 # wheel matches this exact macOS/Python combination) needs a C compiler,
