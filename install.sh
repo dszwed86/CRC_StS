@@ -7,12 +7,34 @@ cd "$(dirname "$0")"
 # which a fresh Mac doesn't have until Xcode Command Line Tools are
 # installed. Checking this up front turns what would otherwise be a wall of
 # cryptic compiler errors deep inside a pip failure into one clear step.
+wait_for() {
+    # Polls a condition (a command string) instead of asking the user to
+    # notice a background installer finished and manually rerun this
+    # script -- the single biggest source of "instalacja jest za trudna"
+    # friction. $1: condition to eval, $2: max seconds to wait, $3: message
+    # printed once while waiting.
+    local condition="$1" max_wait="$2" message="$3" waited=0
+    echo "$message"
+    while ! eval "$condition"; do
+        sleep 5
+        waited=$((waited + 5))
+        if [ "$waited" -ge "$max_wait" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
+
 if ! xcode-select -p &>/dev/null; then
     echo "Brakuje Xcode Command Line Tools (wymagane do zainstalowania niektórych składników)."
-    echo "Otwieram instalator systemowy - potwierdź w oknie, które się pojawi (może to potrwać kilka minut),"
-    echo "a potem uruchom ponownie: bash install.sh"
+    echo "Otwieram instalator systemowy - potwierdź w oknie, które się pojawi."
     xcode-select --install 2>/dev/null || true
-    exit 1
+    if ! wait_for "xcode-select -p &>/dev/null" 900 "Czekam, aż instalacja się zakończy (nic więcej nie trzeba robić, to okno samo pójdzie dalej)..."; then
+        echo "Instalacja Xcode Command Line Tools trwa dłużej niż zwykle."
+        echo "Dokończ ją w oknie instalatora, a potem uruchom ten skrypt ponownie."
+        exit 1
+    fi
+    echo "Xcode Command Line Tools zainstalowane."
 fi
 
 # Can be forced manually, e.g. `PYTHON_BIN=python3.12 bash install.sh`, if
@@ -71,9 +93,14 @@ if [ -z "$PYTHON_BIN" ]; then
         fi
         echo "Otwieram instalator - postępuj zgodnie z instrukcjami na ekranie (poprosi o hasło administratora)."
         open "$PKG_PATH"
-        echo
-        echo "Po zakończeniu instalacji uruchom ponownie: bash install.sh"
-        exit 0
+        NEW_PYTHON="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+        if ! wait_for "[ -x '$NEW_PYTHON' ]" 900 "Czekam, aż zainstalujesz Pythona w tym okienku (nic więcej nie trzeba robić, to okno samo pójdzie dalej)..."; then
+            echo "Nie wykryłem zakończenia instalacji Pythona po 15 minutach."
+            echo "Dokończ instalator, a potem uruchom ten skrypt ponownie."
+            exit 1
+        fi
+        echo "Python 3.12 zainstalowany."
+        PYTHON_BIN="$NEW_PYTHON"
     fi
     if [ -z "$PYTHON_BIN" ]; then
         echo "Automatyczna instalacja Pythona nie powiodła się."
@@ -130,4 +157,4 @@ fi
 rm -f "$INSTALL_LOG"
 
 echo
-echo "Gotowe! Uruchom aplikację poleceniem: bash run.sh"
+echo "Gotowe! Uruchom aplikację klikając dwa razy na Uruchom.command (albo: bash run.sh)."

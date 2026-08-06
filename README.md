@@ -31,32 +31,37 @@ Python nie musi być wcześniej zainstalowany — jeśli `install.bat` go nie zn
 zainstalować go automatycznie przez `winget` (wbudowany menadżer pakietów Windows). Jeśli
 się nie uda (np. bardzo stary Windows bez wingetu), pokaże link do ręcznej instalacji.
 
-**macOS** — w Terminalu, w folderze projektu:
+**macOS** — pobierz/skopiuj cały folder projektu, a potem w Finderze:
 
-```bash
-bash install.sh   # tylko za pierwszym razem
-bash run.sh       # za każdym kolejnym razem
-```
+1. Kliknij dwa razy **`Zainstaluj.command`** (tylko za pierwszym razem — pobiera i instaluje
+   wszystko, co potrzebne; nie trzeba w ogóle otwierać Terminala ręcznie).
+2. Kliknij dwa razy **`Uruchom.command`**, żeby uruchomić aplikację (za każdym kolejnym razem).
 
-Jeśli `install.sh` nie znajdzie Pythona, spróbuje zainstalować go przez Homebrew (jeśli jest),
-a w ostateczności pobierze oficjalny instalator z python.org i otworzy go — wtedy trzeba
-przejść przez standardowy instalator macOS (poprosi o hasło administratora).
+Przy pierwszym uruchomieniu macOS może pokazać ostrzeżenie "nieznany deweloper" — kliknij
+prawym przyciskiem na plik `.command` → **Otwórz**, potwierdź, i od tego momentu uruchamia
+się już normalnie podwójnym kliknięciem.
 
-**Jeśli `install.sh` się wywali** — teraz sam rozpoznaje kilka najczęstszych przyczyn na Macu
+Python nie musi być wcześniej zainstalowany — `Zainstaluj.command` sam go doinstaluje (przez
+Homebrew, jeśli jest, albo pobierając oficjalny instalator z python.org) i **sam czeka, aż
+skończysz przechodzić przez okienko instalatora** — nie trzeba nic uruchamiać drugi raz, skrypt
+sam rusza dalej, gdy Python się pojawi.
+
+**Jeśli mimo to coś się wywali** — skrypt rozpoznaje kilka najczęstszych przyczyn na Macu
 i mówi wprost, co zrobić:
 - brak **Xcode Command Line Tools** (potrzebne do zbudowania niektórych składników) —
-  poprosi o instalację i każe uruchomić `install.sh` ponownie,
-- za stary Python (poniżej 3.11),
-- **za nowy Python dla PySide6** — jeśli na komputerze nie było wcześniej Pythona, skrypt
-  celowo instaluje (przez Homebrew albo instalator z python.org) konkretną, sprawdzoną
-  wersję 3.12, a nie "najnowszą" — PySide6 zwykle obsługuje nowe wydanie Pythona dopiero
-  po kilku miesiącach, więc "najnowszy" bywa jeszcze niekompatybilny i pip kończy błędem
-  w stylu "requires a different Python" / "No matching distribution found for PySide6".
-  Jeśli mimo to trafisz na ten błąd (np. bo Python już był zainstalowany wcześniej), skrypt
+  poprosi o instalację i sam poczeka, aż się zakończy,
+- za stary Python (poniżej 3.11) — obsłużone tak samo jak brak Pythona w ogóle (patrz wyżej),
+- **za nowy Python dla PySide6** — świeżo instalowany Python jest celowo przypięty do
+  sprawdzonej wersji 3.12, a nie "najnowszej" — PySide6 zwykle obsługuje nowe wydanie Pythona
+  dopiero po kilku miesiącach, więc "najnowszy" bywa jeszcze niekompatybilny i pip kończy
+  błędem w stylu "requires a different Python" / "No matching distribution found for PySide6".
+  Jeśli mimo to trafisz na ten błąd (np. bo inny Python już był zainstalowany wcześniej), skrypt
   pokaże dokładne 3 kroki naprawy; interpreter można też wymusić ręcznie: `PYTHON_BIN=python3.12 bash install.sh`.
 
 Jeśli coś innego nie zadziała, skrypt zapisuje pełny log instalacji do pliku i podaje jego
 ścieżkę w komunikacie błędu — to najbardziej przydatna rzecz do przesłania przy zgłaszaniu problemu.
+(`Zainstaluj.command`/`Uruchom.command` to tylko cienkie okienka Terminala wokół `install.sh`/`run.sh` —
+kto woli, może dalej używać `bash install.sh` / `bash run.sh` bezpośrednio.)
 
 <details>
 <summary>Instalacja ręczna (dla programistów)</summary>
