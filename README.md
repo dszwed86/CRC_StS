@@ -10,65 +10,51 @@ tłumaczony w tempie rzeczywistym, tak jakby ktoś mówił na żywo).
 
 ## Wymagania
 
-- Python 3.11+
 - Klucz API Palabra — załóż go na https://platform.palabra.ai/api-keys (nowe konta
   dostają $50 darmowego kredytu; S2S kosztuje $0.04/min)
 - Wirtualne urządzenie audio, żeby przekazać dźwięk do OBS:
   - **Windows**: [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (bezpłatny)
   - **macOS**: [BlackHole](https://existential.audio/blackhole/) (bezpłatny, open source; wersja 2ch wystarczy)
 
-Nie jest wymagany osobno zainstalowany `ffmpeg` — dekodowanie plików obsługuje
-pakiet `av` (PyAV), instalowany razem z resztą zależności przez pip.
+Python **nie jest wymagany** do zwykłego korzystania z aplikacji — gotowe wersje poniżej
+mają wszystko (łącznie z Pythonem) zaszyte w jednym pliku.
 
 ## Instalacja i uruchomienie
 
-Skrypty startowe są podzielone folderami wg systemu — na Windows wchodzisz do folderu
-`windows`, na macOS do folderu `mac`, i tam zostajesz (żadnych dodatkowych plików gdzie
-indziej w projekcie nie trzeba dotykać).
+Najprościej: pobierz gotową aplikację ze strony wydań —
+**[najnowsza wersja](https://github.com/dszwed86/CRC_StS/releases/latest)**.
 
-**Windows** — pobierz/skopiuj cały folder projektu, a potem w folderze `windows`:
+**Windows**
 
-1. Kliknij dwa razy **`install.bat`** (tylko za pierwszym razem — pobiera i instaluje wszystko, co potrzebne).
-2. Kliknij dwa razy **`run.bat`**, żeby uruchomić aplikację (za każdym kolejnym razem).
+1. Pobierz **`PalabraS2S.exe`**.
+2. Kliknij dwa razy. To wszystko — nic więcej nie trzeba instalować.
 
-Python nie musi być wcześniej zainstalowany — jeśli `install.bat` go nie znajdzie, spróbuje
-zainstalować go automatycznie przez `winget` (wbudowany menadżer pakietów Windows). Jeśli
-się nie uda (np. bardzo stary Windows bez wingetu), pokaże link do ręcznej instalacji.
+**macOS**
 
-**macOS** — pobierz/skopiuj cały folder projektu, a potem w folderze `mac`, w Finderze:
+1. Pobierz **`PalabraS2S-macOS.zip`** i rozpakuj (dwuklik w Finderze).
+2. Przy **pierwszym** uruchomieniu: kliknij prawym przyciskiem na `PalabraS2S.app` →
+   **Otwórz** → potwierdź w oknie, które się pojawi. To jednorazowy krok — macOS ostrzega
+   w ten sposób przed każdą aplikacją spoza App Store bez płatnego (99$/rok) certyfikatu
+   Apple Developer, którego ten projekt nie ma. Od tego momentu `PalabraS2S.app` uruchamia
+   się już normalnym podwójnym kliknięciem.
 
-1. Kliknij dwa razy **`Zainstaluj.command`** (tylko za pierwszym razem — pobiera i instaluje
-   wszystko, co potrzebne; nie trzeba w ogóle otwierać Terminala ręcznie).
-2. Kliknij dwa razy **`Uruchom.command`**, żeby uruchomić aplikację (za każdym kolejnym razem).
-
-Przy pierwszym uruchomieniu macOS może pokazać ostrzeżenie "nieznany deweloper" — kliknij
-prawym przyciskiem na plik `.command` → **Otwórz**, potwierdź, i od tego momentu uruchamia
-się już normalnie podwójnym kliknięciem.
-
-Python nie musi być wcześniej zainstalowany — `Zainstaluj.command` sam go doinstaluje (przez
-Homebrew, jeśli jest, albo pobierając oficjalny instalator z python.org) i **sam czeka, aż
-skończysz przechodzić przez okienko instalatora** — nie trzeba nic uruchamiać drugi raz, skrypt
-sam rusza dalej, gdy Python się pojawi.
-
-**Jeśli mimo to coś się wywali** — skrypt rozpoznaje kilka najczęstszych przyczyn na Macu
-i mówi wprost, co zrobić:
-- brak **Xcode Command Line Tools** (potrzebne do zbudowania niektórych składników) —
-  poprosi o instalację i sam poczeka, aż się zakończy,
-- za stary Python (poniżej 3.11) — obsłużone tak samo jak brak Pythona w ogóle (patrz wyżej),
-- **za nowy Python dla PySide6** — świeżo instalowany Python jest celowo przypięty do
-  sprawdzonej wersji 3.12, a nie "najnowszej" — PySide6 zwykle obsługuje nowe wydanie Pythona
-  dopiero po kilku miesiącach, więc "najnowszy" bywa jeszcze niekompatybilny i pip kończy
-  błędem w stylu "requires a different Python" / "No matching distribution found for PySide6".
-  Jeśli mimo to trafisz na ten błąd (np. bo inny Python już był zainstalowany wcześniej), skrypt
-  pokaże dokładne 3 kroki naprawy; interpreter można też wymusić ręcznie: `PYTHON_BIN=python3.12 bash install.sh`.
-
-Jeśli coś innego nie zadziała, skrypt zapisuje pełny log instalacji do pliku i podaje jego
-ścieżkę w komunikacie błędu — to najbardziej przydatna rzecz do przesłania przy zgłaszaniu problemu.
-(`Zainstaluj.command`/`Uruchom.command` to tylko cienkie okienka Terminala wokół `install.sh`/`run.sh` —
-kto woli, może dalej używać `bash install.sh` / `bash run.sh` bezpośrednio.)
+Każda kolejna sesja to już tylko podwójne kliknięcie w pobrany plik — nic się nie instaluje
+ani nie pobiera przy starcie.
 
 <details>
-<summary>Instalacja ręczna (dla programistów)</summary>
+<summary>Budowanie ze źródeł / dla programistów</summary>
+
+Skrypty budujące/startowe są podzielone folderami wg systemu — `windows/` i `mac/`.
+
+**Uruchomienie ze źródeł (bez budowania gotowego pliku)**:
+- Windows: `windows/install.bat` (raz), potem `windows/run.bat`.
+- macOS: `mac/Zainstaluj.command` (raz), potem `mac/Uruchom.command` — automatycznie
+  doinstaluje odpowiedniego Pythona (Homebrew albo instalator z python.org, sam czeka aż
+  skończysz przechodzić przez jego okienko), rozpoznaje najczęstsze przyczyny błędów
+  (brak Xcode Command Line Tools, za stary/za nowy Python dla PySide6) i podpowiada
+  dokładne kroki naprawy zamiast zostawiać samą ścianę tekstu błędu pipa.
+
+Manualnie (dowolny system):
 
 ```bash
 python -m venv .venv
@@ -80,6 +66,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python -m app.main
 ```
+
+**Budowanie własnego `.exe`/`.app`** (to właśnie tak powstały pliki z sekcji wydań powyżej):
+`windows/build.bat` / `mac/build.sh` — wymaga najpierw `install.bat`/`Zainstaluj.command`,
+doinstalowuje PyInstaller i pakuje całą aplikację (Python + biblioteki) w jeden plik.
+Wynik ląduje w `dist/`.
 
 </details>
 
@@ -95,10 +86,9 @@ zostanie zapisany lokalnie w `~/.sts_bridge/.env`. W tym samym oknie:
 
 **Błąd o certyfikacie przy łączeniu z API (macOS)** — Python z instalatora python.org nie
 podpina się automatycznie pod systemowy magazyn certyfikatów, więc każde połączenie z API
-kończyło się błędem w stylu "certificate verify failed". Aplikacja naprawia to sama od
-środka (używa zestawu certyfikatów z pakietu `certifi`), więc nie trzeba już ręcznie
-uruchamiać `Install Certificates.command` z folderu Pythona — wystarczy zainstalować/zaktualizować
-aplikację przez `install.sh`.
+mogło kończyć się błędem w stylu "certificate verify failed". Aplikacja naprawia to sama od
+środka (używa zestawu certyfikatów z pakietu `certifi`, ustawianego zanim cokolwiek łączy się
+z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z folderu Pythona.
 
 ## Konfiguracja OBS
 
