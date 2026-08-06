@@ -122,16 +122,11 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
 
-        author_label = QLabel("autor: Dariusz Szwed")
-        author_label.setStyleSheet("color: gray; font-size: 9pt;")
-        author_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addLayout(test_row)
         layout.addWidget(self.test_result_label)
         layout.addWidget(buttons)
-        layout.addWidget(author_label)
 
     def _on_save(self) -> None:
         api_key = self.api_key_edit.text().strip()
