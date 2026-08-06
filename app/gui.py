@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 from palabra_ai import Palabra
 from palabra_ai.exc import AuthError, PalabraError
 
-from . import config
+from . import __version__, config
 from .audio_io import (
     FileStream,
     MicStream,
@@ -122,11 +122,16 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
 
+        version_label = QLabel(f"wersja {__version__}")
+        version_label.setStyleSheet("color: gray; font-size: 9pt;")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addLayout(test_row)
         layout.addWidget(self.test_result_label)
         layout.addWidget(buttons)
+        layout.addWidget(version_label)
 
     def _on_save(self) -> None:
         api_key = self.api_key_edit.text().strip()
