@@ -42,6 +42,22 @@ Jeśli `install.sh` nie znajdzie Pythona, spróbuje zainstalować go przez Homeb
 a w ostateczności pobierze oficjalny instalator z python.org i otworzy go — wtedy trzeba
 przejść przez standardowy instalator macOS (poprosi o hasło administratora).
 
+**Jeśli `install.sh` się wywali** — teraz sam rozpoznaje kilka najczęstszych przyczyn na Macu
+i mówi wprost, co zrobić:
+- brak **Xcode Command Line Tools** (potrzebne do zbudowania niektórych składników) —
+  poprosi o instalację i każe uruchomić `install.sh` ponownie,
+- za stary Python (poniżej 3.11),
+- **za nowy Python dla PySide6** — jeśli na komputerze nie było wcześniej Pythona, skrypt
+  celowo instaluje (przez Homebrew albo instalator z python.org) konkretną, sprawdzoną
+  wersję 3.12, a nie "najnowszą" — PySide6 zwykle obsługuje nowe wydanie Pythona dopiero
+  po kilku miesiącach, więc "najnowszy" bywa jeszcze niekompatybilny i pip kończy błędem
+  w stylu "requires a different Python" / "No matching distribution found for PySide6".
+  Jeśli mimo to trafisz na ten błąd (np. bo Python już był zainstalowany wcześniej), skrypt
+  pokaże dokładne 3 kroki naprawy; interpreter można też wymusić ręcznie: `PYTHON_BIN=python3.12 bash install.sh`.
+
+Jeśli coś innego nie zadziała, skrypt zapisuje pełny log instalacji do pliku i podaje jego
+ścieżkę w komunikacie błędu — to najbardziej przydatna rzecz do przesłania przy zgłaszaniu problemu.
+
 <details>
 <summary>Instalacja ręczna (dla programistów)</summary>
 
@@ -67,6 +83,13 @@ zostanie zapisany lokalnie w `~/.sts_bridge/.env`. W tym samym oknie:
   `platform.palabra.ai/api-keys`, gdzie widoczne jest saldo kredytów i historia użycia.
   Palabra nie udostępnia tego w publicznym API, więc apka nie może pokazać salda
   bezpośrednio — to najbliższe dostępne rozwiązanie.
+
+**Błąd o certyfikacie przy łączeniu z API (macOS)** — Python z instalatora python.org nie
+podpina się automatycznie pod systemowy magazyn certyfikatów, więc każde połączenie z API
+kończyło się błędem w stylu "certificate verify failed". Aplikacja naprawia to sama od
+środka (używa zestawu certyfikatów z pakietu `certifi`), więc nie trzeba już ręcznie
+uruchamiać `Install Certificates.command` z folderu Pythona — wystarczy zainstalować/zaktualizować
+aplikację przez `install.sh`.
 
 ## Konfiguracja OBS
 

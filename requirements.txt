@@ -4,3 +4,4 @@ numpy
 PySide6
 python-dotenv
 av
+certifi
