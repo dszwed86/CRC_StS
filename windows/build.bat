@@ -17,8 +17,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Buduje PalabraS2S.exe (to zajmie chwile)...
-".venv\Scripts\python.exe" -m PyInstaller --name PalabraS2S --windowed --onefile --noconfirm launcher.py
+echo Buduje "CRC Translator.exe" (to zajmie chwile)...
+".venv\Scripts\python.exe" -m PyInstaller --name "CRC Translator" --windowed --onefile --noconfirm launcher.py
 if errorlevel 1 (
     echo Budowanie nie powiodlo sie. Zobacz komunikat bledu powyzej.
     pause
@@ -26,5 +26,5 @@ if errorlevel 1 (
 )
 
 echo.
-echo Gotowe: dist\PalabraS2S.exe
+echo Gotowe: dist\CRC Translator.exe
 pause

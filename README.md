@@ -1,4 +1,4 @@
-# Palabra S2S → OBS Bridge
+# CRC Translator
 
 Desktopowa aplikacja (Windows i macOS), która tłumaczy mowę w czasie rzeczywistym przez
 [Palabra Speech-to-Speech API](https://platform.palabra.ai/docs/speech-to-speech/overview)
@@ -26,16 +26,16 @@ Najprościej: pobierz gotową aplikację ze strony wydań —
 
 **Windows**
 
-1. Pobierz **`PalabraS2S.exe`**.
+1. Pobierz **`CRC Translator.exe`**.
 2. Kliknij dwa razy. To wszystko — nic więcej nie trzeba instalować.
 
 **macOS**
 
-1. Pobierz **`PalabraS2S-macOS.zip`** i rozpakuj (dwuklik w Finderze).
-2. Przy **pierwszym** uruchomieniu: kliknij prawym przyciskiem na `PalabraS2S.app` →
+1. Pobierz **`CRC-Translator-macOS.zip`** i rozpakuj (dwuklik w Finderze).
+2. Przy **pierwszym** uruchomieniu: kliknij prawym przyciskiem na `CRC Translator.app` →
    **Otwórz** → potwierdź w oknie, które się pojawi. To jednorazowy krok — macOS ostrzega
    w ten sposób przed każdą aplikacją spoza App Store bez płatnego (99$/rok) certyfikatu
-   Apple Developer, którego ten projekt nie ma. Od tego momentu `PalabraS2S.app` uruchamia
+   Apple Developer, którego ten projekt nie ma. Od tego momentu `CRC Translator.app` uruchamia
    się już normalnym podwójnym kliknięciem.
 
 Każda kolejna sesja to już tylko podwójne kliknięcie w pobrany plik — nic się nie instaluje
