@@ -32,11 +32,22 @@ Najprościej: pobierz gotową aplikację ze strony wydań —
 **macOS**
 
 1. Pobierz **`CRC-Translator-macOS.zip`** i rozpakuj (dwuklik w Finderze).
-2. Przy **pierwszym** uruchomieniu: kliknij prawym przyciskiem na `CRC Translator.app` →
-   **Otwórz** → potwierdź w oknie, które się pojawi. To jednorazowy krok — macOS ostrzega
-   w ten sposób przed każdą aplikacją spoza App Store bez płatnego (99$/rok) certyfikatu
-   Apple Developer, którego ten projekt nie ma. Od tego momentu `CRC Translator.app` uruchamia
-   się już normalnym podwójnym kliknięciem.
+2. Przy **pierwszym** uruchomieniu macOS zablokuje aplikację ("nie można zweryfikować dewelopera") —
+   to jednorazowy krok, macOS tak ostrzega przed każdą aplikacją spoza App Store bez płatnego
+   (99$/rok) certyfikatu Apple Developer, którego ten projekt nie ma. Odblokuj jednym z dwóch sposobów:
+   - **Terminal (najpewniejsze, jedna komenda)** — otwórz Terminal i wpisz (dostosuj ścieżkę, jeśli
+     rozpakowałeś gdzie indziej niż Downloads):
+     ```bash
+     xattr -cr ~/Downloads/"CRC Translator.app"
+     ```
+     Potem zwykłe podwójne kliknięcie już działa.
+   - **Przez Ustawienia systemowe** — spróbuj otworzyć aplikację (pokaże się blokada), potem
+     **System Settings → Privacy & Security**, przewiń w dół do komunikatu o zablokowanej
+     aplikacji i kliknij **Open Anyway** ("Otwórz mimo to"), potwierdź hasłem/Touch ID, uruchom
+     ponownie.
+
+   (Samo kliknięcie prawym przyciskiem → Otwórz, opisywane jako standardowy sposób obejścia
+   Gatekeepera, na nowszych wersjach macOS — Sonoma/Sequoia — czasem już nie wystarcza.)
 
 Każda kolejna sesja to już tylko podwójne kliknięcie w pobrany plik — nic się nie instaluje
 ani nie pobiera przy starcie.
