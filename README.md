@@ -26,7 +26,7 @@ Najprościej: pobierz gotową aplikację ze strony wydań —
 
 **Windows**
 
-1. Pobierz **`CRC Translator.exe`**.
+1. Pobierz **`CRC.Translator.exe`** (GitHub zamienia spacje w nazwie pliku na kropki).
 2. Kliknij dwa razy. To wszystko — nic więcej nie trzeba instalować.
 
 **macOS**
