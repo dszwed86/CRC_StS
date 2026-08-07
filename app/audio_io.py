@@ -155,6 +155,38 @@ class MicStream:
         self._stream.stop()
         self._stream.close()
 
+    def switch_device(self, new_device: int | None) -> None:
+        """Swaps to a different physical input device without disturbing
+        chunks()'s already-running pacing loop: it only ever reads from
+        self._q, filled by the same self._on_audio callback regardless of
+        which sd.RawInputStream is calling it, so nothing about the async
+        generator or its pacing state needs to change -- only which stream
+        object is open.
+
+        The new stream is opened and started BEFORE the old one is
+        stopped/closed, and self._stream is only reassigned once that
+        succeeds -- so a failure here (e.g. the new device doesn't support
+        our fixed sample rate) leaves the working old stream untouched
+        instead of leaving the session without any mic at all.
+
+        Must be called from the thread that originally opened this
+        MicStream (SessionWorker's background thread, which has COM
+        initialized on Windows for WASAPI -- see SessionWorker.start()).
+        """
+        new_stream = sd.RawInputStream(
+            samplerate=RATE,
+            channels=CHANNELS,
+            dtype="int16",
+            device=new_device,
+            callback=self._on_audio,
+            extra_settings=_wasapi_extra_settings(),
+        )
+        new_stream.start()
+        old_stream = self._stream
+        self._stream = new_stream
+        old_stream.stop()
+        old_stream.close()
+
     def pause(self) -> None:
         self._paused.set()
 

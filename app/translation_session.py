@@ -144,6 +144,21 @@ class TranslationRunner:
         except Exception as e:
             self._on_error(f"Nieoczekiwany błąd: {e}")
 
+    def request_change_mic_device(self, device_index: int) -> None:
+        """Swaps the physical input device a live MicStream reads from.
+
+        Unlike request_change_voice (which needs set_task() -- a real
+        server-side call), this is purely local device I/O: the Palabra
+        session never sees which physical microphone produced the PCM
+        bytes it receives, so this never touches the session at all. Same
+        threading rule as request_pause/request_seek.
+        """
+        if hasattr(self._source, "switch_device"):
+            try:
+                self._source.switch_device(device_index)
+            except Exception as e:
+                self._on_error(f"Nie udało się przełączyć mikrofonu: {e}")
+
     def request_seek(self, position_ms: float) -> None:
         """Jumps a seekable source to position_ms and drops in-flight audio for a clean cut."""
         if not hasattr(self._source, "seek"):

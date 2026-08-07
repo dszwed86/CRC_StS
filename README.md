@@ -180,6 +180,11 @@ W trybie **Plik** dodatkowo:
 
 W trybie **Mikrofon** dodatkowo:
 
+- **Zmiana mikrofonu w trakcie sesji** — lista wyboru mikrofonu (inaczej niż reszta ustawień)
+  zostaje aktywna także po kliknięciu Start. Wybór innego urządzenia z listy przełącza na nie
+  natychmiast, bez przerywania ani restartowania sesji — to czysto lokalna zmiana (serwer
+  Palabra nigdy nie wie, z jakiego fizycznego mikrofonu pochodzi dźwięk), więc nie ma ryzyka
+  błędów po stronie API, jakie występowały przy próbie zmiany głosu w locie.
 - **Głośność mikrofonu** — suwak 0–100%. Przy 0% mikrofon jest wyciszony (wysyła ciszę),
   ale sesja i tak trwa dalej (naliczanie po stronie Palabry nie jest wstrzymane — do tego
   służy Pauza). Przydatne do szybkiego, chwilowego wyciszenia bez przerywania sesji.

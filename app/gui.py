@@ -417,6 +417,9 @@ class SessionWorker(QObject):
     def change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
         self._call_on_loop("request_change_voice", voice_id, voice_cloning)
 
+    def change_mic_device(self, device_index: int) -> None:
+        self._call_on_loop("request_change_mic_device", device_index)
+
     def set_mic_gain(self, gain: float) -> None:
         # MicStream.set_gain() is a plain thread-safe attribute write (no asyncio
         # involved), so this can be called directly -- no loop marshaling needed.
@@ -489,6 +492,7 @@ class MainWindow(QMainWindow):
         self._input_devices = list_input_devices()
         for d in self._input_devices:
             self.mic_combo.addItem(d.name, d.index)
+        self.mic_combo.currentIndexChanged.connect(self._on_mic_selection_changed)
 
         self.mic_gain_row = QWidget()
         mic_gain_outer = QVBoxLayout(self.mic_gain_row)
@@ -685,10 +689,14 @@ class MainWindow(QMainWindow):
         # mechanism couldn't be confirmed. Disabled here rather than ripped
         # out -- remove voice_combo/voice_custom_edit from this list again to
         # re-enable live switching if that gets root-caused later.
+        # mic_combo is deliberately NOT in this list -- unlike voice, switching
+        # the input device mid-session never touches the Palabra session at
+        # all (it's purely local device I/O, see MicStream.switch_device), so
+        # it stays enabled and live-switchable during a running Mikrofon
+        # session; see _on_mic_selection_changed.
         self._config_widgets = [
             self.settings_btn,
             self.mode_combo,
-            self.mic_combo,
             self.file_btn,
             self.output_combo,
             self.subtitles_only_check,
@@ -774,6 +782,18 @@ class MainWindow(QMainWindow):
         self.mic_gain_row.setVisible(not file_mode)
         self.position_slider.setVisible(file_mode)
         self.position_label.setVisible(file_mode)
+
+    def _on_mic_selection_changed(self, _index: int) -> None:
+        # Live device switching mid-session (see SessionWorker.change_mic_device)
+        # -- a no-op before Start (no worker yet) or in file mode (mic_combo
+        # exists but isn't the active source, and is hidden behind file_row
+        # anyway; mode_combo itself stays locked during a session so this
+        # can't actually flip mode mid-stream).
+        if self._worker is None or self.mode_combo.currentIndex() != 0:
+            return
+        device = self.mic_combo.currentData()
+        if device is not None:
+            self._worker.change_mic_device(device)
 
     def _choose_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
