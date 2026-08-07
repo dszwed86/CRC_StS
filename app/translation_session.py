@@ -68,6 +68,7 @@ class TranslationRunner:
         stop_event: threading.Event | None = None,
         voice_id: str | None = None,
         voice_cloning: bool = False,
+        mute_output: bool = False,
     ):
         self._palabra = Palabra(api_key=api_key, region=region)
         self._source_lang = source_lang
@@ -76,6 +77,13 @@ class TranslationRunner:
         self._sink = sink
         self._voice_id = voice_id
         self._voice_cloning = voice_cloning
+        # Palabra has no server-side option to skip speech generation (it
+        # only lets you configure HOW the voice sounds, not whether it's
+        # produced at all -- confirmed against the docs), so translated
+        # audio is still generated and billed the same either way. This
+        # just stops the app from routing/playing it locally, for a
+        # subtitles-only workflow.
+        self._mute_output = mute_output
         self._on_state = on_state
         self._on_transcript = on_transcript
         self._on_error = on_error
@@ -251,7 +259,8 @@ class TranslationRunner:
                                 )
                             )
                         elif isinstance(event, Audio):
-                            self._sink.play(event.pcm)
+                            if not self._mute_output:
+                                self._sink.play(event.pcm)
                         elif isinstance(event, ServerWarning):
                             self._on_error(f"Ostrzeżenie: {event.message}")
                 finally:

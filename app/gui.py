@@ -287,6 +287,7 @@ class SessionWorker(QObject):
         mic_gate_threshold: float = 0.0,
         voice_id: str | None = None,
         voice_cloning: bool = False,
+        subtitles_only: bool = False,
     ):
         super().__init__()
         self._api_key = api_key
@@ -299,6 +300,7 @@ class SessionWorker(QObject):
         self._initial_gate_threshold = mic_gate_threshold
         self._voice_id = voice_id
         self._voice_cloning = voice_cloning
+        self._subtitles_only = subtitles_only
         self._loop: asyncio.AbstractEventLoop | None = None
         self._runner: TranslationRunner | None = None
         self._file_source: FileStream | None = None
@@ -365,6 +367,7 @@ class SessionWorker(QObject):
                     stop_event=self._stop_event,
                     voice_id=self._voice_id,
                     voice_cloning=self._voice_cloning,
+                    mute_output=self._subtitles_only,
                 )
                 self._loop.run_until_complete(self._runner.run())
         except Exception as e:  # device open failure etc. — before/outside TranslationRunner's own handling
@@ -548,6 +551,14 @@ class MainWindow(QMainWindow):
             self.output_hint.setVisible(False)
         form.addRow("Wyjście (do OBS):", self.output_combo)
 
+        self.subtitles_only_check = QCheckBox("Tylko napisy (bez dźwięku)")
+        self.subtitles_only_check.setToolTip(
+            "Odebrane przetłumaczone audio nie jest odtwarzane na wybrane wyjście -- zostaje "
+            "tylko tekst (log/overlay). Palabra API nie oferuje trybu bez syntezy mowy, więc "
+            "koszt sesji się nie zmienia -- to tylko wycisza odtwarzanie po stronie aplikacji."
+        )
+        form.addRow("", self.subtitles_only_check)
+
         self.source_lang_combo = QComboBox()
         for code, name in SOURCE_LANGUAGES:
             self.source_lang_combo.addItem(f"{name} ({code})", code)
@@ -666,6 +677,7 @@ class MainWindow(QMainWindow):
             self.mic_combo,
             self.file_btn,
             self.output_combo,
+            self.subtitles_only_check,
             self.source_lang_combo,
             self.target_lang_combo,
             self.voice_combo,
@@ -826,8 +838,9 @@ class MainWindow(QMainWindow):
         # virtual cable) and re-translate it endlessly -- confirmed live:
         # the exact same sentence repeating in the log over and over until
         # Stop was clicked. File mode never opens a mic (see
-        # SessionWorker.start()), so it can't feed back this way.
-        if not file_mode:
+        # SessionWorker.start()), so it can't feed back this way -- and
+        # neither can subtitles-only mode, since no audio is ever played.
+        if not file_mode and not self.subtitles_only_check.isChecked():
             output_name = self.output_combo.currentText()
             if not is_virtual_cable_name(output_name):
                 answer = QMessageBox.warning(
@@ -876,6 +889,7 @@ class MainWindow(QMainWindow):
             mic_gate_threshold=self.mic_gate_slider.value() / 100,
             voice_id=voice_id,
             voice_cloning=voice_cloning,
+            subtitles_only=self.subtitles_only_check.isChecked(),
         )
         # A plain threading.Thread, not QThread: on Windows, running PortAudio
         # (WASAPI) device I/O on a QThread intermittently crashed the whole

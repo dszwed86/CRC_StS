@@ -158,6 +158,13 @@ odtwarzający wciąż tę samą pętlę.
    od tego momentu taki głos pojawia się od razu na liście wyboru, także po restarcie aplikacji.
    Głos, tak jak języki i urządzenia, jest zablokowany na czas trwania sesji — zmień go przed
    kliknięciem Start.
+
+   **Tylko napisy (bez dźwięku)** — checkbox obok wyboru wyjścia: przetłumaczone audio nie jest
+   odtwarzane na wybrane urządzenie, zostaje tylko tekst (log/okienko z napisami). Palabra nie
+   oferuje trybu bez syntezy mowy, więc koszt sesji się nie zmienia — to tylko wycisza
+   odtwarzanie po stronie aplikacji, przydatne gdy zależy Ci wyłącznie na napisach do OBS.
+   Przy włączonym trybie ostrzeżenie o pętli sprzężenia zwrotnego (patrz niżej) się nie
+   pojawia — skoro żaden dźwięk nie jest odtwarzany, mikrofon nie ma czego złapać.
 3. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie.
 4. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
    przed zamknięciem połączenia.
@@ -256,6 +263,17 @@ właściwą treścią tego nie naprawia (sprawdzone eksperymentalnie). To jednor
 początku sesji, nie problem powtarzający się przy każdym zdaniu — przy dłuższej rozmowie/pliku
 jest pomijalny. Praktyczna rada: zacznij mówić z niewielkim naddatkiem (np. "Dzień dobry,
 zaczynamy...") zanim przejdziesz do treści, która ma się liczyć.
+
+## Długie sesje / pliki (2h+)
+
+Sprawdzone testem: tryb Plik radzi sobie z plikami 2-godzinnymi bez problemu. Dekodowanie
+całego pliku na raz zajmuje ok. 330 MB pamięci na 2h dźwięku (jednorazowo, w pełni zwalniane
+po zakończeniu sesji) — bez wycieków pamięci w trakcie samej sesji: historia transkrypcji jest
+ograniczona do ostatnich 300 zdarzeń, a okienko z napisami zawsze pokazuje tylko kilka
+ostatnich linijek, niezależnie od długości sesji. Jedyna rzecz, która rośnie z czasem, to
+widoczna zawartość głównego logu w oknie aplikacji (celowo nieograniczona — zobacz "Wyczyść
+transkrypcję" wyżej) — dla pełnej 2-godzinnej sesji to rzędu kilkuset KB tekstu, nieistotne
+dla pamięci komputera.
 
 ## Poza zakresem tej wersji
 
