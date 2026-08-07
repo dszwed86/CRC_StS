@@ -506,10 +506,24 @@ class MainWindow(QMainWindow):
         mic_gain_outer.addLayout(gain_row)
 
         gate_row = QHBoxLayout()
-        gate_row.addWidget(QLabel("Próg czułości (wytnij ciszej niż):"))
+        gate_label_text = QLabel("Ignoruj ciszej niż:")
+        gate_tooltip = (
+            "Dźwięk cichszy niż ten poziom jest całkowicie pomijany (zamieniany na ciszę) "
+            "zanim trafi do tłumaczenia — Twoja mowa musi być głośniejsza niż ustawiony próg, "
+            "żeby się liczyła.\n\n"
+            "0% (Wyłączony) = nic nie jest pomijane, wszystko przechodzi normalnie.\n"
+            "Im wyżej, tym WIĘCEJ dźwięku jest odcinane (nie odwrotnie) — przy wysokiej "
+            "wartości nawet Twoja własna, cichsza mowa może zostać ucięta.\n\n"
+            "Przydatne głównie przeciw pętli sprzężenia zwrotnego (mikrofon łapiący własne "
+            "tłumaczenie z głośnika) — zacznij od niskiej wartości (15-20%) i zwiększaj tylko "
+            "jeśli to konieczne."
+        )
+        gate_label_text.setToolTip(gate_tooltip)
+        gate_row.addWidget(gate_label_text)
         self.mic_gate_slider = QSlider(Qt.Orientation.Horizontal)
         self.mic_gate_slider.setRange(0, 100)
         self.mic_gate_slider.setValue(0)
+        self.mic_gate_slider.setToolTip(gate_tooltip)
         self.mic_gate_slider.valueChanged.connect(self._on_mic_gate_changed)
         self.mic_gate_label = QLabel("Wyłączony")
         gate_row.addWidget(self.mic_gate_slider, stretch=1)
