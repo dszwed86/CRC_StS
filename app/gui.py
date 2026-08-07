@@ -433,6 +433,14 @@ _STATE_LABELS = {
     SessionState.ERROR: "Błąd",
 }
 
+# Feedback-loop auto-pause (mic mode only -- see _on_transcript): the same
+# final (source or translation) text repeating this many times in a row,
+# within this many seconds of each other, is treated as a probable feedback
+# loop (real speech essentially never repeats a whole sentence verbatim this
+# many times back to back) rather than a coincidence.
+LOOP_REPEAT_THRESHOLD = 3
+LOOP_REPEAT_WINDOW_SECONDS = 15.0
+
 
 def _fmt_ms(ms: float) -> str:
     total_seconds = int(ms // 1000)
@@ -448,6 +456,13 @@ class MainWindow(QMainWindow):
         self._selected_file: str | None = None
         self._overlay: OverlayWindow | None = None
         self._transcript_history: list[TranscriptEvent] = []
+        # Feedback-loop auto-pause bookkeeping -- see _on_transcript. Keyed by
+        # is_translation so a repeating source line and a repeating
+        # translation line are tracked (and can each trigger) independently.
+        self._loop_repeat_state: dict[bool, tuple[str | None, int, float]] = {
+            True: (None, 0, 0.0),
+            False: (None, 0, 0.0),
+        }
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -849,6 +864,7 @@ class MainWindow(QMainWindow):
         # start a new one, and a fresh session's first event should always
         # start a new line even if the previous one ended on a partial.
         self._partial_line_active = False
+        self._loop_repeat_state = {True: (None, 0, 0.0), False: (None, 0, 0.0)}
         worker = SessionWorker(
             api_key=creds.api_key,
             source_lang=source_lang,
@@ -948,6 +964,8 @@ class MainWindow(QMainWindow):
         # accumulate an unbounded list.
         self._transcript_history.append(event)
         del self._transcript_history[:-300]
+        if event.is_final and self.mode_combo.currentIndex() == 0:  # mic mode only
+            self._check_loop_repeat(event)
         if self._overlay is not None:
             self._overlay.on_transcript(event)  # overlay applies its own, independent filter
         if not self._event_passes_log_filter(event):
@@ -960,6 +978,51 @@ class MainWindow(QMainWindow):
         # A growing (non-final) line keeps getting replaced in place; once final,
         # the NEXT event (e.g. the translation) must start its own new line.
         self._partial_line_active = not event.is_final
+
+    def _check_loop_repeat(self, event: TranscriptEvent) -> None:
+        """Feedback-loop detection: mic mode only (file mode can't feed back --
+        see SessionWorker.start(), which never opens a mic for it), confirmed
+        via a real incident where a live mic picked up this app's own
+        translated output through speakers and kept re-translating it,
+        producing the exact same final text over and over. Real speech
+        essentially never repeats a whole sentence verbatim LOOP_REPEAT_THRESHOLD
+        times in a row within LOOP_REPEAT_WINDOW_SECONDS of each other, so
+        that pattern is treated as a probable loop and auto-pauses the
+        session -- see _trigger_loop_auto_pause for why NOT auto-resuming
+        afterward is deliberate.
+        """
+        normalized = event.text.strip()
+        if not normalized:
+            return
+        prev_text, prev_count, prev_time = self._loop_repeat_state[event.is_translation]
+        if normalized == prev_text and (event.timestamp - prev_time) < LOOP_REPEAT_WINDOW_SECONDS:
+            count = prev_count + 1
+        else:
+            count = 1
+        self._loop_repeat_state[event.is_translation] = (normalized, count, event.timestamp)
+        if count >= LOOP_REPEAT_THRESHOLD:
+            # Reset immediately so this doesn't refire on every further repeat
+            # while the pause request is still in flight.
+            self._loop_repeat_state[event.is_translation] = (None, 0, event.timestamp)
+            self._trigger_loop_auto_pause(normalized)
+
+    def _trigger_loop_auto_pause(self, repeated_text: str) -> None:
+        self._partial_line_active = False
+        self.log.appendPlainText(
+            f"⚠ Wykryto prawdopodobną pętlę sprzężenia zwrotnego (to samo tłumaczenie "
+            f"powtórzone {LOOP_REPEAT_THRESHOLD}x z rzędu) — sesja wstrzymana automatycznie."
+        )
+        if self._worker is not None and not self._is_paused and not self._pause_request_pending:
+            self._pause_request_pending = True
+            self._worker.pause()
+        QMessageBox.warning(
+            self,
+            "Wykryto pętlę sprzężenia zwrotnego",
+            f'To samo tłumaczenie ("{repeated_text}") powtórzyło się {LOOP_REPEAT_THRESHOLD}x z rzędu — '
+            "sesja została automatycznie wstrzymana (Pauza), żeby nie generować dalszych kosztów.\n\n"
+            "Prawdopodobna przyczyna: mikrofon słyszy własne tłumaczenie z głośnika. Użyj słuchawek, "
+            "zmień urządzenie wyjściowe, albo ustaw Próg czułości mikrofonu, a potem kliknij Wznów.",
+        )
 
     def _event_passes_log_filter(self, event: TranscriptEvent) -> bool:
         filter_mode = self.log_filter_combo.currentData()

@@ -132,6 +132,14 @@ zdanie powtarzające się bez końca w logu, aż do ręcznego Stop (zaobserwowan
 złapał dźwięk z głośnika mimo sporej odległości). Tryb Plik nigdy nie otwiera mikrofonu, więc
 tego ostrzeżenia tam nie ma.
 
+**Automatyczna Pauza przy wykrytej pętli** — dodatkowe zabezpieczenie działające już w trakcie
+sesji (nie tylko przy Start), również tylko w trybie Mikrofon: jeśli to samo (finalne)
+tłumaczenie powtórzy się **3 razy z rzędu** w odstępach krótszych niż 15 sekund, aplikacja
+sama wciska Pauzę (zatrzymuje też naliczanie u Palabry) i pokazuje okno z wyjaśnieniem.
+Celowo **nie wznawia się sama** — wymaga ręcznego kliknięcia Wznów po naprawieniu przyczyny
+(słuchawki, inne wyjście, Próg czułości mikrofonu), żeby nie wpaść w cykl auto-pauza/auto-start
+odtwarzający wciąż tę samą pętlę.
+
 ## Użycie
 
 1. Wybierz źródło: **Mikrofon** (i konkretne urządzenie z listy) albo **Plik**
