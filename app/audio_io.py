@@ -117,14 +117,17 @@ class MicStream:
     """Captures a microphone as an async stream of 320 ms PCM chunks.
 
     Supports pause()/resume() (stops feeding the session, e.g. to pause billing
-    without losing the device) and set_gain() (0.0-1.0, for a live volume/mute
-    slider that doesn't touch the session at all).
+    without losing the device), set_gain() (0.0-1.0, for a live volume/mute
+    slider that doesn't touch the session at all), and set_gate_threshold()
+    (0.0-1.0, a noise gate: chunks whose peak amplitude falls below the
+    threshold are replaced with silence instead of being sent as-is).
     """
 
     def __init__(self, device: int | None = None):
         self._q: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self._paused = threading.Event()
         self._gain = 1.0
+        self._gate_threshold = 0.0
         self._stream = sd.RawInputStream(
             samplerate=RATE,
             channels=CHANNELS,
@@ -161,6 +164,18 @@ class MicStream:
     def set_gain(self, gain: float) -> None:
         """0.0 (silent) .. 1.0 (full volume). Thread-safe; applied to the next chunks."""
         self._gain = max(0.0, min(1.0, gain))
+
+    def set_gate_threshold(self, threshold: float) -> None:
+        """0.0 (off -- every chunk passes through) .. 1.0 (only near-full-scale
+        peaks pass). Thread-safe; applied to the next chunks, before gain, so
+        its meaning doesn't shift depending on the gain slider's position.
+
+        Meant to filter out quiet background sound the mic shouldn't be
+        picking up as speech at all (in particular, a live translation's own
+        output leaking back in through speakers) without also quietening
+        down actual, closer speech the way turning down gain would.
+        """
+        self._gate_threshold = max(0.0, min(1.0, threshold))
 
     async def chunks(self) -> AsyncIterator[bytes]:
         """Yields fixed-size 320 ms PCM chunks, paced to real time."""
@@ -251,6 +266,10 @@ class MicStream:
                 pending = pending[CHUNK_BYTES:]
 
     def _apply_gain(self, chunk: bytes) -> bytes:
+        if self._gate_threshold > 0.0:
+            peak = int(np.abs(np.frombuffer(chunk, dtype=np.int16)).max())
+            if peak < self._gate_threshold * 32767:
+                return bytes(len(chunk))  # below the sensitivity threshold -- treat as silence
         gain = self._gain
         if gain >= 1.0:
             return chunk

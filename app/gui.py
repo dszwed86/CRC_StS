@@ -284,6 +284,7 @@ class SessionWorker(QObject):
         output_device: int | None,
         file_path: str | None,
         mic_gain: float = 1.0,
+        mic_gate_threshold: float = 0.0,
         voice_id: str | None = None,
         voice_cloning: bool = False,
     ):
@@ -295,6 +296,7 @@ class SessionWorker(QObject):
         self._output_device = output_device
         self._file_path = file_path
         self._initial_mic_gain = mic_gain
+        self._initial_gate_threshold = mic_gate_threshold
         self._voice_id = voice_id
         self._voice_cloning = voice_cloning
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -344,6 +346,7 @@ class SessionWorker(QObject):
             if self._file_path is None:
                 source_cm = MicStream(device=self._mic_device)
                 source_cm.set_gain(self._initial_mic_gain)
+                source_cm.set_gate_threshold(self._initial_gate_threshold)
                 self._mic_source = source_cm
             else:
                 source_cm = FileStream(self._file_path)
@@ -417,6 +420,10 @@ class SessionWorker(QObject):
         if self._mic_source is not None:
             self._mic_source.set_gain(gain)
 
+    def set_gate_threshold(self, threshold: float) -> None:
+        if self._mic_source is not None:
+            self._mic_source.set_gate_threshold(threshold)
+
 
 _STATE_LABELS = {
     SessionState.CONNECTING: "Łączenie...",
@@ -466,16 +473,30 @@ class MainWindow(QMainWindow):
             self.mic_combo.addItem(d.name, d.index)
 
         self.mic_gain_row = QWidget()
-        mic_gain_layout = QHBoxLayout(self.mic_gain_row)
-        mic_gain_layout.setContentsMargins(0, 0, 0, 0)
-        mic_gain_layout.addWidget(QLabel("Głośność mikrofonu:"))
+        mic_gain_outer = QVBoxLayout(self.mic_gain_row)
+        mic_gain_outer.setContentsMargins(0, 0, 0, 0)
+
+        gain_row = QHBoxLayout()
+        gain_row.addWidget(QLabel("Głośność mikrofonu:"))
         self.mic_gain_slider = QSlider(Qt.Orientation.Horizontal)
         self.mic_gain_slider.setRange(0, 100)
         self.mic_gain_slider.setValue(100)
         self.mic_gain_slider.valueChanged.connect(self._on_mic_gain_changed)
         self.mic_gain_label = QLabel("100%")
-        mic_gain_layout.addWidget(self.mic_gain_slider, stretch=1)
-        mic_gain_layout.addWidget(self.mic_gain_label)
+        gain_row.addWidget(self.mic_gain_slider, stretch=1)
+        gain_row.addWidget(self.mic_gain_label)
+        mic_gain_outer.addLayout(gain_row)
+
+        gate_row = QHBoxLayout()
+        gate_row.addWidget(QLabel("Próg czułości (wytnij ciszej niż):"))
+        self.mic_gate_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mic_gate_slider.setRange(0, 100)
+        self.mic_gate_slider.setValue(0)
+        self.mic_gate_slider.valueChanged.connect(self._on_mic_gate_changed)
+        self.mic_gate_label = QLabel("Wyłączony")
+        gate_row.addWidget(self.mic_gate_slider, stretch=1)
+        gate_row.addWidget(self.mic_gate_label)
+        mic_gain_outer.addLayout(gate_row)
 
         self.file_row = QWidget()
         file_layout = QHBoxLayout(self.file_row)
@@ -758,6 +779,11 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.set_mic_gain(value / 100)
 
+    def _on_mic_gate_changed(self, value: int) -> None:
+        self.mic_gate_label.setText("Wyłączony" if value == 0 else f"{value}%")
+        if self._worker is not None:
+            self._worker.set_gate_threshold(value / 100)
+
     def _on_start_stop(self) -> None:
         if self._worker is not None:
             self.start_stop_btn.setEnabled(False)
@@ -831,6 +857,7 @@ class MainWindow(QMainWindow):
             output_device=output_device,
             file_path=file_path,
             mic_gain=self.mic_gain_slider.value() / 100,
+            mic_gate_threshold=self.mic_gate_slider.value() / 100,
             voice_id=voice_id,
             voice_cloning=voice_cloning,
         )

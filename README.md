@@ -168,6 +168,12 @@ W trybie **Mikrofon** dodatkowo:
 - **Głośność mikrofonu** — suwak 0–100%. Przy 0% mikrofon jest wyciszony (wysyła ciszę),
   ale sesja i tak trwa dalej (naliczanie po stronie Palabry nie jest wstrzymane — do tego
   służy Pauza). Przydatne do szybkiego, chwilowego wyciszenia bez przerywania sesji.
+- **Próg czułości (wytnij ciszej niż)** — suwak 0–100%, domyślnie wyłączony (0%). Inaczej niż
+  głośność (która ścisza wszystko po równo, także Twój głos), to prawdziwy próg: dźwięk
+  cichszy niż ustawiony poziom jest całkowicie wycinany (zamieniany na ciszę) *zanim* zostanie
+  wysłany, a głośniejszy (bliższa mowa) przechodzi bez zmian. Pomaga odciąć ciche, odległe
+  dźwięki — w tym własne tłumaczenie dobiegające z głośnika, patrz ochrona przed pętlą
+  sprzężenia zwrotnego wyżej — bez ściszania rozmówcy.
 
 **Odśwież urządzenia** — przycisk obok wyboru mikrofonu ponownie skanuje sprzęt audio, więc
 mikrofon podłączony *po* uruchomieniu aplikacji też się pojawi na liście (bez restartu apki).
