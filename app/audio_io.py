@@ -7,6 +7,7 @@ little-endian, mono, 24 kHz (see palabra_ai.audio.OUTPUT_SAMPLE_RATE).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import queue
 import threading
 import time
@@ -384,6 +385,135 @@ class FileStream:
                 anchor = time.monotonic()
                 anchor_ms = 0.0
         self.position_ms = self.total_ms
+
+
+def _mix_pcm(a: bytes, b: bytes) -> bytes:
+    """Sums two equal-length int16 PCM buffers sample-by-sample, clipping to
+    the valid range instead of wrapping around on overflow. The standard,
+    simple way to combine two audio sources into one; if both are loud at
+    the same instant the result can clip (no per-source gain reduction is
+    applied) -- acceptable for combining a live mic with a file, not
+    intended as a mastering-quality mixer."""
+    arr_a = np.frombuffer(a, dtype=np.int16).astype(np.int32)
+    arr_b = np.frombuffer(b, dtype=np.int16).astype(np.int32)
+    return np.clip(arr_a + arr_b, -32768, 32767).astype(np.int16).tobytes()
+
+
+class MixedSource:
+    """Combines a live MicStream and a FileStream into one mixed audio
+    stream for a single translation session -- e.g. a live host talking
+    over a pre-recorded narration file, translated together as one
+    conversation instead of two separate sessions.
+
+    Pause/resume/seek intentionally do NOT reuse MicStream/FileStream's own
+    pause()/resume() protocol (see pause_file/resume_file below): the mic
+    stays live the entire time, only the file's contribution can be
+    paused/resumed/seeked. Because of that, TranslationRunner's normal
+    request_pause() (which also pauses -- and stops billing on -- the whole
+    server-side session) must never run for this source; the GUI calls
+    SessionWorker.pause_file()/resume_file() instead, which only touch this
+    class directly and never touch the session at all, since the mic is
+    still live and needs the session to keep running normally.
+    """
+
+    def __init__(self, mic: MicStream, file: FileStream):
+        self._mic = mic
+        self._file = file
+        # Small bound: both sub-sources already self-pace to ~1 chunk per
+        # CHUNK_MS, so these stay near-empty in steady state -- this is just
+        # a safety cap against unbounded growth if either stalls, not a
+        # buffer this design relies on filling up.
+        self._mic_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
+        self._file_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
+
+    def __enter__(self) -> "MixedSource":
+        self._mic.__enter__()
+        try:
+            self._file.__enter__()
+        except Exception:
+            self._mic.__exit__(None, None, None)
+            raise
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self._file.__exit__(*exc_info)
+        self._mic.__exit__(*exc_info)
+
+    def pause_file(self) -> None:
+        self._file.pause()
+
+    def resume_file(self) -> None:
+        self._file.resume()
+
+    def seek(self, position_ms: float) -> None:
+        self._file.seek(position_ms)
+
+    def switch_device(self, new_device: int | None) -> None:
+        self._mic.switch_device(new_device)
+
+    @property
+    def position_ms(self) -> float:
+        return self._file.position_ms
+
+    @property
+    def total_ms(self) -> float:
+        return self._file.total_ms
+
+    async def _pump(self, source: MicStream | FileStream, q: asyncio.Queue[bytes]) -> None:
+        async for chunk in source.chunks():
+            try:
+                q.put_nowait(chunk)
+            except asyncio.QueueFull:
+                # Drop the oldest rather than the newest to stay close to
+                # real time if something briefly falls behind -- matches
+                # MicStream's own backlog-capping rationale.
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    q.get_nowait()
+                q.put_nowait(chunk)
+
+    async def chunks(self) -> AsyncIterator[bytes]:
+        """Yields fixed-size 320 ms PCM chunks mixed from both sub-sources,
+        paced to real time by this method itself (not by draining the
+        sub-sources' own chunks() directly): each sub-source is pumped into
+        its own queue by a background task, and this loop takes whatever is
+        currently available from each queue every tick -- silence if
+        nothing is (the file is paused, has finished, or is momentarily
+        behind) -- instead of waiting on both together. That's essential:
+        if this waited for both queues every tick, a paused (or finished)
+        file would stall the live mic side too, which is exactly what
+        pause_file() must NOT do.
+        """
+        mic_task = asyncio.create_task(self._pump(self._mic, self._mic_q))
+        file_task = asyncio.create_task(self._pump(self._file, self._file_q))
+        silence = bytes(CHUNK_BYTES)
+        anchor = time.monotonic()
+        anchor_ms = 0.0
+        try:
+            while True:
+                anchor_ms += CHUNK_MS
+                delay = anchor + anchor_ms / 1000 - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                else:
+                    # Same resync-on-behind rationale as MicStream/FileStream.
+                    anchor = time.monotonic()
+                    anchor_ms = 0.0
+                try:
+                    mic_chunk = self._mic_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    mic_chunk = silence
+                try:
+                    file_chunk = self._file_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    file_chunk = silence
+                yield _mix_pcm(mic_chunk, file_chunk)
+        finally:
+            mic_task.cancel()
+            file_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await mic_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await file_task
 
 
 class OutputSink:

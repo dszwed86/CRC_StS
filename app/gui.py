@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSlider,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +39,7 @@ from . import __version__, config
 from .audio_io import (
     FileStream,
     MicStream,
+    MixedSource,
     OutputSink,
     find_virtual_cable,
     is_virtual_cable_name,
@@ -283,6 +283,7 @@ class SessionWorker(QObject):
         mic_device: int | None,
         output_device: int | None,
         file_path: str | None,
+        include_mic: bool = True,
         mic_gain: float = 1.0,
         mic_gate_threshold: float = 0.0,
         voice_id: str | None = None,
@@ -296,6 +297,11 @@ class SessionWorker(QObject):
         self._mic_device = mic_device
         self._output_device = output_device
         self._file_path = file_path
+        # include_mic distinguishes "no mic at all" (file-only mode) from
+        # "use the mic, and mic_device=None happens to mean the system
+        # default" (mic-only or mixed mode) -- mic_device alone can't tell
+        # those apart, since None is a valid device selection too.
+        self._include_mic = include_mic
         self._initial_mic_gain = mic_gain
         self._initial_gate_threshold = mic_gate_threshold
         self._voice_id = voice_id
@@ -305,6 +311,7 @@ class SessionWorker(QObject):
         self._runner: TranslationRunner | None = None
         self._file_source: FileStream | None = None
         self._mic_source: MicStream | None = None
+        self._mixed_source: MixedSource | None = None
         # Created here (not in start()) so stop() is safe to call the instant the
         # worker exists, even before the background thread has begun running —
         # otherwise a fast Start-then-Stop click could be silently lost.
@@ -345,7 +352,16 @@ class SessionWorker(QObject):
             # escaped uncaught, finished.emit() in the finally block below would
             # never run, leaving the GUI thinking a session is still active --
             # Start/Stop stuck forever until the app is restarted.
-            if self._file_path is None:
+            if self._include_mic and self._file_path is not None:
+                mic = MicStream(device=self._mic_device)
+                mic.set_gain(self._initial_mic_gain)
+                mic.set_gate_threshold(self._initial_gate_threshold)
+                self._mic_source = mic
+                file = FileStream(self._file_path)
+                self._file_source = file
+                source_cm = MixedSource(mic, file)
+                self._mixed_source = source_cm
+            elif self._include_mic:
                 source_cm = MicStream(device=self._mic_device)
                 source_cm.set_gain(self._initial_mic_gain)
                 source_cm.set_gate_threshold(self._initial_gate_threshold)
@@ -420,6 +436,20 @@ class SessionWorker(QObject):
     def change_mic_device(self, device_index: int) -> None:
         self._call_on_loop("request_change_mic_device", device_index)
 
+    def pause_file(self) -> None:
+        # Deliberately does NOT go through request_pause() / the asyncio loop:
+        # MixedSource.pause_file() is a plain thread-safe attribute write
+        # (same as FileStream.pause() itself), and -- more importantly --
+        # request_pause() would also pause the server-side session (stopping
+        # the still-live mic from being translated at all). This only ever
+        # touches the file half, directly, from whichever thread calls it.
+        if self._mixed_source is not None:
+            self._mixed_source.pause_file()
+
+    def resume_file(self) -> None:
+        if self._mixed_source is not None:
+            self._mixed_source.resume_file()
+
     def set_mic_gain(self, gain: float) -> None:
         # MicStream.set_gain() is a plain thread-safe attribute write (no asyncio
         # involved), so this can be called directly -- no loop marshaling needed.
@@ -484,7 +514,12 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Mikrofon", "Plik"])
+        self.mode_combo.addItems(["Mikrofon", "Plik", "Mikrofon + Plik"])
+        self.mode_combo.setToolTip(
+            "\"Mikrofon + Plik\" miksuje oba dźwięki w jedno wspólne tłumaczenie (np. lektor z "
+            "pliku + osoba mówiąca na żywo) zamiast dwóch osobnych sesji. Pauza dotyczy wtedy "
+            "tylko pliku -- mikrofon zostaje aktywny przez cały czas."
+        )
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         form.addRow("Źródło:", self.mode_combo)
 
@@ -543,11 +578,16 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.file_label, stretch=1)
         file_layout.addWidget(self.file_btn)
 
-        self.source_stack = QStackedWidget()
-        self.source_stack.addWidget(self.mic_combo)
-        self.source_stack.addWidget(self.file_row)
+        # A plain vertical stack of both rows (not a QStackedWidget) so
+        # "Mikrofon + Plik" mode can show BOTH at once -- each row's own
+        # visibility is toggled in _on_mode_changed instead of only one
+        # being showable at a time.
+        source_col = QVBoxLayout()
+        source_col.setContentsMargins(0, 0, 0, 0)
+        source_col.addWidget(self.mic_combo)
+        source_col.addWidget(self.file_row)
         input_row = QHBoxLayout()
-        input_row.addWidget(self.source_stack, stretch=1)
+        input_row.addLayout(source_col, stretch=1)
         self.refresh_devices_btn = QPushButton("Odśwież urządzenia")
         self.refresh_devices_btn.clicked.connect(self._on_refresh_devices)
         input_row.addWidget(self.refresh_devices_btn)
@@ -622,11 +662,13 @@ class MainWindow(QMainWindow):
         playback_layout.addWidget(self.position_slider, stretch=1)
         playback_layout.addWidget(self.position_label)
         root.addWidget(self.playback_row)
-        # playback_row itself (holding pause_btn) stays visible in both modes --
+        # playback_row itself (holding pause_btn) stays visible in all modes --
         # only the position slider/label (file-only, no meaning for a live mic)
-        # are toggled in _on_mode_changed.
-        self.position_slider.setVisible(False)
-        self.position_label.setVisible(False)
+        # are toggled in _on_mode_changed. mode_combo's currentIndexChanged
+        # already fired once during addItems() above, before this method was
+        # connected, so the initial mic_combo/file_row/mic_gain_row/position_*
+        # visibility needs this explicit call instead of relying on the signal.
+        self._on_mode_changed(self.mode_combo.currentIndex())
 
         self._position_timer = QTimer(self)
         self._position_timer.setInterval(250)
@@ -777,19 +819,21 @@ class MainWindow(QMainWindow):
         self._rebuild_voice_combo()
 
     def _on_mode_changed(self, index: int) -> None:
-        file_mode = index == 1
-        self.source_stack.setCurrentIndex(index)
-        self.mic_gain_row.setVisible(not file_mode)
-        self.position_slider.setVisible(file_mode)
-        self.position_label.setVisible(file_mode)
+        mic_active = index in (0, 2)
+        file_active = index in (1, 2)
+        self.mic_combo.setVisible(mic_active)
+        self.file_row.setVisible(file_active)
+        self.mic_gain_row.setVisible(mic_active)
+        self.position_slider.setVisible(file_active)
+        self.position_label.setVisible(file_active)
 
     def _on_mic_selection_changed(self, _index: int) -> None:
         # Live device switching mid-session (see SessionWorker.change_mic_device)
-        # -- a no-op before Start (no worker yet) or in file mode (mic_combo
+        # -- a no-op before Start (no worker yet) or in file-only mode (mic_combo
         # exists but isn't the active source, and is hidden behind file_row
         # anyway; mode_combo itself stays locked during a session so this
         # can't actually flip mode mid-stream).
-        if self._worker is None or self.mode_combo.currentIndex() != 0:
+        if self._worker is None or self.mode_combo.currentIndex() not in (0, 2):
             return
         device = self.mic_combo.currentData()
         if device is not None:
@@ -858,9 +902,11 @@ class MainWindow(QMainWindow):
             self._open_settings()
             return
 
-        file_mode = self.mode_combo.currentIndex() == 1
-        file_path = self._selected_file if file_mode else None
-        if file_mode and not file_path:
+        mode_idx = self.mode_combo.currentIndex()
+        mic_active = mode_idx in (0, 2)
+        needs_file = mode_idx in (1, 2)
+        file_path = self._selected_file if needs_file else None
+        if needs_file and not file_path:
             QMessageBox.warning(self, "Brak pliku", "Wybierz plik audio/wideo do przetłumaczenia.")
             return
         if self.output_combo.count() == 0:
@@ -871,10 +917,10 @@ class MainWindow(QMainWindow):
         # output back up (e.g. it's routed to real speakers instead of a
         # virtual cable) and re-translate it endlessly -- confirmed live:
         # the exact same sentence repeating in the log over and over until
-        # Stop was clicked. File mode never opens a mic (see
+        # Stop was clicked. File-only mode never opens a mic (see
         # SessionWorker.start()), so it can't feed back this way -- and
         # neither can subtitles-only mode, since no audio is ever played.
-        if not file_mode and not self.subtitles_only_check.isChecked():
+        if mic_active and not self.subtitles_only_check.isChecked():
             output_name = self.output_combo.currentText()
             if not is_virtual_cable_name(output_name):
                 answer = QMessageBox.warning(
@@ -892,7 +938,7 @@ class MainWindow(QMainWindow):
                 if answer == QMessageBox.StandardButton.No:
                     return
 
-        mic_device = None if file_mode else self.mic_combo.currentData()
+        mic_device = self.mic_combo.currentData() if mic_active else None
         output_device = self.output_combo.currentData()
         source_lang = self.source_lang_combo.currentData()
         target_lang = self.target_lang_combo.currentData()
@@ -919,6 +965,7 @@ class MainWindow(QMainWindow):
             mic_device=mic_device,
             output_device=output_device,
             file_path=file_path,
+            include_mic=mic_active,
             mic_gain=self.mic_gain_slider.value() / 100,
             mic_gate_threshold=self.mic_gate_slider.value() / 100,
             voice_id=voice_id,
@@ -944,7 +991,7 @@ class MainWindow(QMainWindow):
         thread.start()
         self.start_stop_btn.setText("Stop")
         self._set_config_enabled(False)
-        if file_mode:
+        if needs_file:
             self._position_timer.start()
 
     def _on_state(self, state: SessionState) -> None:
@@ -978,7 +1025,23 @@ class MainWindow(QMainWindow):
         self.position_label.setText("00:00 / 00:00")
 
     def _on_pause_resume(self) -> None:
-        if self._worker is None or self._pause_request_pending:
+        if self._worker is None:
+            return
+        if self.mode_combo.currentIndex() == 2:
+            # Mixed mode: Pauza/Wznów only pause the FILE locally -- the mic
+            # and the underlying Palabra session keep running (still billed,
+            # still translating whatever the mic picks up), so this is a
+            # plain synchronous call on SessionWorker, not the server-side
+            # pause/resume path below (which would stop the whole session).
+            self._is_paused = not self._is_paused
+            if self._is_paused:
+                self._worker.pause_file()
+                self.pause_btn.setText("Wznów")
+            else:
+                self._worker.resume_file()
+                self.pause_btn.setText("Pauza")
+            return
+        if self._pause_request_pending:
             return
         self._pause_request_pending = True
         if self._is_paused:
