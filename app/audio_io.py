@@ -461,6 +461,14 @@ class MixedSource:
 
     async def _pump(self, source: MicStream | FileStream, q: asyncio.Queue[bytes]) -> None:
         async for chunk in source.chunks():
+            if len(chunk) < CHUNK_BYTES:
+                # FileStream's very last chunk before EOF can be shorter than
+                # CHUNK_BYTES (whatever's left in the file) -- pad it so
+                # _mix_pcm always sees two equal-length buffers, same as
+                # every other chunk. MicStream itself never yields a short
+                # chunk, but padding here rather than assuming that keeps
+                # this pump correct regardless of the source.
+                chunk = chunk + bytes(CHUNK_BYTES - len(chunk))
             try:
                 q.put_nowait(chunk)
             except asyncio.QueueFull:
