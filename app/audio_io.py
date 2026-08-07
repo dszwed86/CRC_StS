@@ -97,11 +97,18 @@ def list_output_devices() -> list[DeviceInfo]:
 _VIRTUAL_CABLE_MARKERS = ("cable", "blackhole")
 
 
+def is_virtual_cable_name(device_name: str) -> bool:
+    """True if a device name looks like a virtual audio cable (VB-Cable on
+    Windows, BlackHole on macOS) rather than a real, audible output (e.g.
+    speakers/headphones) a microphone could pick back up."""
+    lowered = device_name.lower()
+    return any(marker in lowered for marker in _VIRTUAL_CABLE_MARKERS)
+
+
 def find_virtual_cable(devices: list[DeviceInfo]) -> DeviceInfo | None:
     """Finds a likely virtual-audio-cable output (VB-Cable on Windows, BlackHole on macOS)."""
     for d in devices:
-        lowered = d.name.lower()
-        if any(marker in lowered for marker in _VIRTUAL_CABLE_MARKERS):
+        if is_virtual_cable_name(d.name):
             return d
     return None
 

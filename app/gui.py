@@ -42,6 +42,7 @@ from .audio_io import (
     MicStream,
     OutputSink,
     find_virtual_cable,
+    is_virtual_cable_name,
     list_input_devices,
     list_output_devices,
     rescan_devices,
@@ -778,6 +779,30 @@ class MainWindow(QMainWindow):
         if self.output_combo.count() == 0:
             QMessageBox.critical(self, "Brak urządzenia wyjściowego", "System nie zgłasza żadnego urządzenia audio wyjściowego.")
             return
+
+        # Loop-protection: a live mic can physically pick this app's own
+        # output back up (e.g. it's routed to real speakers instead of a
+        # virtual cable) and re-translate it endlessly -- confirmed live:
+        # the exact same sentence repeating in the log over and over until
+        # Stop was clicked. File mode never opens a mic (see
+        # SessionWorker.start()), so it can't feed back this way.
+        if not file_mode:
+            output_name = self.output_combo.currentText()
+            if not is_virtual_cable_name(output_name):
+                answer = QMessageBox.warning(
+                    self,
+                    "Wybrane wyjście może spowodować pętlę sprzężenia",
+                    f'Wybrane urządzenie wyjściowe ("{output_name}") nie wygląda na wirtualny '
+                    "kabel audio (VB-Cable / BlackHole).\n\n"
+                    "Jeśli mikrofon może usłyszeć ten dźwięk (np. przez głośniki), tłumaczenie "
+                    "może wpaść w pętlę sprzężenia zwrotnego — to samo zdanie tłumaczone w kółko, "
+                    "aż do ręcznego zatrzymania.\n\n"
+                    "Kontynuować mimo to?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer == QMessageBox.StandardButton.No:
+                    return
 
         mic_device = None if file_mode else self.mic_combo.currentData()
         output_device = self.output_combo.currentData()

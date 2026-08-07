@@ -124,6 +124,14 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
    zawiera "CABLE" lub "BlackHole"; w przeciwnym razie wybierz je ręcznie z listy.)
 5. Miernik poziomu przy nowym źródle w OBS powinien reagować, gdy aplikacja tłumaczy mowę.
 
+**Ochrona przed pętlą sprzężenia zwrotnego** — w trybie Mikrofon, jeśli wybrane "Wyjście (do
+OBS)" nie wygląda na wirtualny kabel (np. to zwykłe głośniki), aplikacja przy Start pokazuje
+ostrzeżenie i pyta, czy kontynuować. Powód: jeśli mikrofon może usłyszeć to, co gra z wybranego
+wyjścia, tłumaczenie samo siebie usłyszy i zacznie tłumaczyć własny wynik w kółko — to samo
+zdanie powtarzające się bez końca w logu, aż do ręcznego Stop (zaobserwowane naprawdę: mikrofon
+złapał dźwięk z głośnika mimo sporej odległości). Tryb Plik nigdy nie otwiera mikrofonu, więc
+tego ostrzeżenia tam nie ma.
+
 ## Użycie
 
 1. Wybierz źródło: **Mikrofon** (i konkretne urządzenie z listy) albo **Plik**
