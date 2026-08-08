@@ -459,7 +459,7 @@ class MixedSource:
     still live and needs the session to keep running normally.
     """
 
-    def __init__(self, mic: MicStream, file: FileStream):
+    def __init__(self, mic: MicStream, file: FileStream | None = None):
         self._mic = mic
         self._file = file
         # Small bound: both sub-sources already self-pace to ~1 chunk per
@@ -468,39 +468,45 @@ class MixedSource:
         # buffer this design relies on filling up.
         self._mic_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
         self._file_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
+        self._file_task: asyncio.Task | None = None
 
     def __enter__(self) -> "MixedSource":
         self._mic.__enter__()
-        try:
-            self._file.__enter__()
-        except Exception:
-            self._mic.__exit__(None, None, None)
-            raise
+        if self._file is not None:
+            try:
+                self._file.__enter__()
+            except Exception:
+                self._mic.__exit__(None, None, None)
+                raise
         return self
 
     def __exit__(self, *exc_info) -> None:
-        self._file.__exit__(*exc_info)
+        if self._file is not None:
+            self._file.__exit__(*exc_info)
         self._mic.__exit__(*exc_info)
 
     def pause_file(self) -> None:
-        self._file.pause()
+        if self._file is not None:
+            self._file.pause()
 
     def resume_file(self) -> None:
-        self._file.resume()
+        if self._file is not None:
+            self._file.resume()
 
     def seek(self, position_ms: float) -> None:
-        self._file.seek(position_ms)
+        if self._file is not None:
+            self._file.seek(position_ms)
 
     def switch_device(self, new_device: int | None) -> None:
         self._mic.switch_device(new_device)
 
     @property
     def position_ms(self) -> float:
-        return self._file.position_ms
+        return self._file.position_ms if self._file is not None else 0.0
 
     @property
     def total_ms(self) -> float:
-        return self._file.total_ms
+        return self._file.total_ms if self._file is not None else 0.0
 
     async def _pump(self, source: MicStream | FileStream, q: asyncio.Queue[bytes]) -> None:
         async for chunk in source.chunks():
@@ -535,7 +541,8 @@ class MixedSource:
         pause_file() must NOT do.
         """
         mic_task = asyncio.create_task(self._pump(self._mic, self._mic_q))
-        file_task = asyncio.create_task(self._pump(self._file, self._file_q))
+        if self._file is not None:
+            self._file_task = asyncio.create_task(self._pump(self._file, self._file_q))
         silence = bytes(CHUNK_BYTES)
         pacer = RealtimePacer(CHUNK_MS)
         try:
@@ -552,11 +559,13 @@ class MixedSource:
                 yield _mix_pcm(mic_chunk, file_chunk)
         finally:
             mic_task.cancel()
-            file_task.cancel()
+            if self._file_task is not None:
+                self._file_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await mic_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await file_task
+            if self._file_task is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._file_task
 
 
 class OutputSink:
