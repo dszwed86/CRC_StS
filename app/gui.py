@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import sys
 import threading
+from dataclasses import dataclass
 from enum import Enum
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
@@ -276,6 +277,22 @@ class SavedVoicesDialog(QDialog):
         self._refresh_list()
 
 
+@dataclass
+class SessionConfig:
+    api_key: str
+    source_lang: str
+    target_lang: str
+    mic_device: int | None
+    output_device: int | None
+    file_path: str | None
+    include_mic: bool = True
+    mic_gain: float = 1.0
+    mic_gate_threshold: float = 0.0
+    voice_id: str | None = None
+    voice_cloning: bool = False
+    subtitles_only: bool = False
+
+
 class SessionWorker(QObject):
     """Owns the audio devices and the asyncio loop for one translation run.
 
@@ -290,38 +307,24 @@ class SessionWorker(QObject):
     error_occurred = Signal(str)
     finished = Signal()
 
-    def __init__(
-        self,
-        api_key: str,
-        source_lang: str,
-        target_lang: str,
-        mic_device: int | None,
-        output_device: int | None,
-        file_path: str | None,
-        include_mic: bool = True,
-        mic_gain: float = 1.0,
-        mic_gate_threshold: float = 0.0,
-        voice_id: str | None = None,
-        voice_cloning: bool = False,
-        subtitles_only: bool = False,
-    ):
+    def __init__(self, config: SessionConfig):
         super().__init__()
-        self._api_key = api_key
-        self._source_lang = source_lang
-        self._target_lang = target_lang
-        self._mic_device = mic_device
-        self._output_device = output_device
-        self._file_path = file_path
+        self._api_key = config.api_key
+        self._source_lang = config.source_lang
+        self._target_lang = config.target_lang
+        self._mic_device = config.mic_device
+        self._output_device = config.output_device
+        self._file_path = config.file_path
         # include_mic distinguishes "no mic at all" (file-only mode) from
         # "use the mic, and mic_device=None happens to mean the system
         # default" (mic-only or mixed mode) -- mic_device alone can't tell
         # those apart, since None is a valid device selection too.
-        self._include_mic = include_mic
-        self._initial_mic_gain = mic_gain
-        self._initial_gate_threshold = mic_gate_threshold
-        self._voice_id = voice_id
-        self._voice_cloning = voice_cloning
-        self._subtitles_only = subtitles_only
+        self._include_mic = config.include_mic
+        self._initial_mic_gain = config.mic_gain
+        self._initial_gate_threshold = config.mic_gate_threshold
+        self._voice_id = config.voice_id
+        self._voice_cloning = config.voice_cloning
+        self._subtitles_only = config.subtitles_only
         self._loop: asyncio.AbstractEventLoop | None = None
         self._runner: TranslationRunner | None = None
         self._file_source: FileStream | None = None
@@ -1000,7 +1003,7 @@ class MainWindow(QMainWindow):
         # start a new line even if the previous one ended on a partial.
         self._partial_line_active = False
         self._loop_repeat_state = {True: (None, 0, 0.0), False: (None, 0, 0.0)}
-        worker = SessionWorker(
+        worker = SessionWorker(SessionConfig(
             api_key=creds.api_key,
             source_lang=source_lang,
             target_lang=target_lang,
@@ -1013,7 +1016,7 @@ class MainWindow(QMainWindow):
             voice_id=voice_id,
             voice_cloning=voice_cloning,
             subtitles_only=self.subtitles_only_check.isChecked(),
-        )
+        ))
         # A plain threading.Thread, not QThread: on Windows, running PortAudio
         # (WASAPI) device I/O on a QThread intermittently crashed the whole
         # process on session teardown (native crash, no Python traceback --
