@@ -472,7 +472,7 @@ _STATE_LABELS = {
     SessionState.ERROR: "Błąd",
 }
 
-# Feedback-loop auto-pause (mic mode only -- see _on_transcript): the same
+# Feedback-loop auto-pause (see _on_transcript): the same
 # final (source or translation) text repeating this many times in a row,
 # within this many seconds of each other, is treated as a probable feedback
 # loop (real speech essentially never repeats a whole sentence verbatim this
@@ -741,9 +741,12 @@ class MainWindow(QMainWindow):
         # mic_combo, it stays live-toggleable during a running session (see
         # _on_subtitles_only_toggled): muting/unmuting playback is purely
         # local, never touches the server session.
+        # file_btn/file_clear_btn are deliberately NOT in this list either --
+        # the file can be added, changed, or removed for the whole duration
+        # of a session (see _choose_file/_on_clear_file), same live-editable
+        # treatment as mic_combo and subtitles_only_check above.
         self._config_widgets = [
             self.settings_btn,
-            self.file_btn,
             self.output_combo,
             self.source_lang_combo,
             self.target_lang_combo,
@@ -823,11 +826,9 @@ class MainWindow(QMainWindow):
 
     def _on_mic_selection_changed(self, _index: int) -> None:
         # Live device switching mid-session (see SessionWorker.change_mic_device)
-        # -- a no-op before Start (no worker yet) or in file-only mode (mic_combo
-        # exists but isn't the active source, and is hidden behind file_row
-        # anyway; mode_combo itself stays locked during a session so this
-        # can't actually flip mode mid-stream).
-        if self._worker is None or not self._current_mode().has_mic:
+        # -- a no-op before Start (no worker yet). The mic is always the
+        # active source now, so there's no mode check left to make.
+        if self._worker is None:
             return
         device = self.mic_combo.currentData()
         if device is not None:
@@ -849,9 +850,36 @@ class MainWindow(QMainWindow):
             return
         self._selected_file = path
         self.file_label.setText(path)
+        self.file_clear_btn.setEnabled(True)
+        self.position_slider.setVisible(True)
+        self.position_label.setVisible(True)
+        self.file_pause_btn.setVisible(True)
+        if self._worker is not None:
+            # Live add/change mid-session: same "never autoplay" rule as a
+            # file selected before Start -- see SessionWorker.set_file() /
+            # TranslationRunner._do_set_file, which pauses it before it's
+            # ever handed to MixedSource.
+            self._file_paused = True
+            self.file_pause_btn.setText("Wznów plik")
+            self.file_pause_btn.setEnabled(True)
+            self._position_timer.start()
+            self._worker.set_file(path)
 
     def _on_clear_file(self) -> None:
-        pass  # implemented in Task 6
+        self._selected_file = None
+        self.file_label.setText("(nie wybrano pliku)")
+        self.file_clear_btn.setEnabled(False)
+        self.position_slider.setVisible(False)
+        self.position_label.setVisible(False)
+        self.position_slider.setEnabled(False)
+        self.position_slider.setValue(0)
+        self.position_label.setText("00:00 / 00:00")
+        self.file_pause_btn.setVisible(False)
+        self.file_pause_btn.setEnabled(False)
+        self._file_paused = False
+        self.file_pause_btn.setText("Pauza pliku")
+        if self._worker is not None:
+            self._worker.set_file(None)
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
@@ -902,8 +930,7 @@ class MainWindow(QMainWindow):
         it's safe to proceed (not risky, or the user chose to continue
         anyway), False if the user declined.
         """
-        mic_active = True
-        if not mic_active or self.subtitles_only_check.isChecked():
+        if self.subtitles_only_check.isChecked():
             return True
         output_name = self.output_combo.currentText()
         if is_virtual_cable_name(output_name):
@@ -1107,7 +1134,7 @@ class MainWindow(QMainWindow):
         # accumulate an unbounded list.
         self._transcript_history.append(event)
         del self._transcript_history[:-300]
-        if event.is_final and self._current_mode() == SessionMode.MIC:  # mic mode only
+        if event.is_final:
             self._check_loop_repeat(event)
         if self._overlay is not None:
             self._overlay.on_transcript(event)  # overlay applies its own, independent filter
@@ -1123,8 +1150,10 @@ class MainWindow(QMainWindow):
         self._partial_line_active = not event.is_final
 
     def _check_loop_repeat(self, event: TranscriptEvent) -> None:
-        """Feedback-loop detection: mic mode only (file mode can't feed back --
-        see SessionWorker.start(), which never opens a mic for it), confirmed
+        """Feedback-loop detection: the mic is always live now, so this
+        always runs (previously scoped to mic-only mode, which under-
+        protected mixed mic+file sessions -- a live mic can feed back on
+        itself regardless of whether a file is also playing). Confirmed
         via a real incident where a live mic picked up this app's own
         translated output through speakers and kept re-translating it,
         producing the exact same final text over and over. Real speech
