@@ -10,7 +10,6 @@ import contextlib
 import sys
 import threading
 from dataclasses import dataclass
-from enum import Enum
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QTextCursor
@@ -56,20 +55,6 @@ from .translation_session import SessionState, TranscriptEvent, TranslationRunne
 
 REGION = "eu"  # only region that currently serves the translation product
 DASHBOARD_URL = "https://platform.palabra.ai/api-keys"  # account/keys dashboard (shows usage & balance)
-
-
-class SessionMode(Enum):
-    MIC = 0
-    FILE = 1
-    MIC_AND_FILE = 2
-
-    @property
-    def has_mic(self) -> bool:
-        return self in (SessionMode.MIC, SessionMode.MIC_AND_FILE)
-
-    @property
-    def has_file(self) -> bool:
-        return self in (SessionMode.FILE, SessionMode.MIC_AND_FILE)
 
 
 class ApiKeyTester(QObject):
@@ -531,16 +516,6 @@ class MainWindow(QMainWindow):
 
         form = QFormLayout()
 
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Mikrofon", "Plik", "Mikrofon + Plik"])
-        self.mode_combo.setToolTip(
-            "\"Mikrofon + Plik\" miksuje oba dźwięki w jedno wspólne tłumaczenie (np. lektor z "
-            "pliku + osoba mówiąca na żywo) zamiast dwóch osobnych sesji. Pauza dotyczy wtedy "
-            "tylko pliku -- mikrofon zostaje aktywny przez cały czas."
-        )
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        form.addRow("Źródło:", self.mode_combo)
-
         self.mic_combo = QComboBox()
         self._input_devices = list_input_devices()
         for d in self._input_devices:
@@ -593,24 +568,25 @@ class MainWindow(QMainWindow):
         self.file_label = QLabel("(nie wybrano pliku)")
         self.file_btn = QPushButton("Wybierz plik...")
         self.file_btn.clicked.connect(self._choose_file)
+        self.file_clear_btn = QPushButton("✕")
+        self.file_clear_btn.setToolTip("Usuń wybrany plik")
+        self.file_clear_btn.setEnabled(False)
+        self.file_clear_btn.clicked.connect(self._on_clear_file)
         file_layout.addWidget(self.file_label, stretch=1)
         file_layout.addWidget(self.file_btn)
+        file_layout.addWidget(self.file_clear_btn)
 
-        # A plain vertical stack of both rows (not a QStackedWidget) so
-        # "Mikrofon + Plik" mode can show BOTH at once -- each row's own
-        # visibility is toggled in _on_mode_changed instead of only one
-        # being showable at a time.
-        source_col = QVBoxLayout()
-        source_col.setContentsMargins(0, 0, 0, 0)
-        source_col.addWidget(self.mic_combo)
-        source_col.addWidget(self.file_row)
-        input_row = QHBoxLayout()
-        input_row.addLayout(source_col, stretch=1)
+        # mic and file are both always part of every session now -- there is
+        # no mode selector, so both rows are always visible; no toggling code
+        # needed at all (contrast with the old _on_mode_changed).
+        mic_row = QHBoxLayout()
+        mic_row.addWidget(self.mic_combo, stretch=1)
         self.refresh_devices_btn = QPushButton("Odśwież urządzenia")
         self.refresh_devices_btn.clicked.connect(self._on_refresh_devices)
-        input_row.addWidget(self.refresh_devices_btn)
-        form.addRow("Wejście:", input_row)
+        mic_row.addWidget(self.refresh_devices_btn)
+        form.addRow("Mikrofon:", mic_row)
         form.addRow("", self.mic_gain_row)
+        form.addRow("Plik (opcjonalnie):", self.file_row)
 
         self.output_combo = QComboBox()
         self._output_devices = list_output_devices()
@@ -681,13 +657,11 @@ class MainWindow(QMainWindow):
         playback_layout.addWidget(self.position_slider, stretch=1)
         playback_layout.addWidget(self.position_label)
         root.addWidget(self.playback_row)
-        # playback_row itself (holding pause_btn) stays visible in all modes --
-        # only the position slider/label (file-only, no meaning for a live mic)
-        # are toggled in _on_mode_changed. mode_combo's currentIndexChanged
-        # already fired once during addItems() above, before this method was
-        # connected, so the initial mic_combo/file_row/mic_gain_row/position_*
-        # visibility needs this explicit call instead of relying on the signal.
-        self._on_mode_changed(self.mode_combo.currentIndex())
+        # position_slider/position_label start hidden -- no file is selected
+        # yet at construction time; _choose_file()/_on_clear_file() toggle
+        # them from here on (see Task 6).
+        self.position_slider.setVisible(False)
+        self.position_label.setVisible(False)
 
         self._position_timer = QTimer(self)
         self._position_timer.setInterval(250)
@@ -761,7 +735,6 @@ class MainWindow(QMainWindow):
         # local, never touches the server session.
         self._config_widgets = [
             self.settings_btn,
-            self.mode_combo,
             self.file_btn,
             self.output_combo,
             self.source_lang_combo,
@@ -840,19 +813,6 @@ class MainWindow(QMainWindow):
         SavedVoicesDialog(self).exec()
         self._rebuild_voice_combo()
 
-    def _current_mode(self) -> SessionMode:
-        return SessionMode(self.mode_combo.currentIndex())
-
-    def _on_mode_changed(self, index: int) -> None:
-        mode = SessionMode(index)
-        mic_active = mode.has_mic
-        file_active = mode.has_file
-        self.mic_combo.setVisible(mic_active)
-        self.file_row.setVisible(file_active)
-        self.mic_gain_row.setVisible(mic_active)
-        self.position_slider.setVisible(file_active)
-        self.position_label.setVisible(file_active)
-
     def _on_mic_selection_changed(self, _index: int) -> None:
         # Live device switching mid-session (see SessionWorker.change_mic_device)
         # -- a no-op before Start (no worker yet) or in file-only mode (mic_combo
@@ -881,6 +841,9 @@ class MainWindow(QMainWindow):
             return
         self._selected_file = path
         self.file_label.setText(path)
+
+    def _on_clear_file(self) -> None:
+        pass  # implemented in Task 6
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
