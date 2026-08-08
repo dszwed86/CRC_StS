@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import sys
 import threading
+from enum import Enum
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QTextCursor
@@ -53,6 +54,20 @@ from .translation_session import SessionState, TranscriptEvent, TranslationRunne
 
 REGION = "eu"  # only region that currently serves the translation product
 DASHBOARD_URL = "https://platform.palabra.ai/api-keys"  # account/keys dashboard (shows usage & balance)
+
+
+class SessionMode(Enum):
+    MIC = 0
+    FILE = 1
+    MIC_AND_FILE = 2
+
+    @property
+    def has_mic(self) -> bool:
+        return self in (SessionMode.MIC, SessionMode.MIC_AND_FILE)
+
+    @property
+    def has_file(self) -> bool:
+        return self in (SessionMode.FILE, SessionMode.MIC_AND_FILE)
 
 
 class ApiKeyTester(QObject):
@@ -832,9 +847,13 @@ class MainWindow(QMainWindow):
         SavedVoicesDialog(self).exec()
         self._rebuild_voice_combo()
 
+    def _current_mode(self) -> SessionMode:
+        return SessionMode(self.mode_combo.currentIndex())
+
     def _on_mode_changed(self, index: int) -> None:
-        mic_active = index in (0, 2)
-        file_active = index in (1, 2)
+        mode = SessionMode(index)
+        mic_active = mode.has_mic
+        file_active = mode.has_file
         self.mic_combo.setVisible(mic_active)
         self.file_row.setVisible(file_active)
         self.mic_gain_row.setVisible(mic_active)
@@ -847,7 +866,7 @@ class MainWindow(QMainWindow):
         # exists but isn't the active source, and is hidden behind file_row
         # anyway; mode_combo itself stays locked during a session so this
         # can't actually flip mode mid-stream).
-        if self._worker is None or self.mode_combo.currentIndex() not in (0, 2):
+        if self._worker is None or not self._current_mode().has_mic:
             return
         device = self.mic_combo.currentData()
         if device is not None:
@@ -913,8 +932,7 @@ class MainWindow(QMainWindow):
         it's safe to proceed (not risky, or the user chose to continue
         anyway), False if the user declined.
         """
-        mode_idx = self.mode_combo.currentIndex()
-        mic_active = mode_idx in (0, 2)
+        mic_active = self._current_mode().has_mic
         if not mic_active or self.subtitles_only_check.isChecked():
             return True
         output_name = self.output_combo.currentText()
@@ -947,9 +965,9 @@ class MainWindow(QMainWindow):
             self._open_settings()
             return
 
-        mode_idx = self.mode_combo.currentIndex()
-        mic_active = mode_idx in (0, 2)
-        needs_file = mode_idx in (1, 2)
+        mode = self._current_mode()
+        mic_active = mode.has_mic
+        needs_file = mode.has_file
         file_path = self._selected_file if needs_file else None
         if needs_file and not file_path:
             QMessageBox.warning(self, "Brak pliku", "Wybierz plik audio/wideo do przetłumaczenia.")
@@ -1065,7 +1083,7 @@ class MainWindow(QMainWindow):
     def _on_pause_resume(self) -> None:
         if self._worker is None:
             return
-        if self.mode_combo.currentIndex() == 2:
+        if self._current_mode() == SessionMode.MIC_AND_FILE:
             # Mixed mode: Pauza/Wznów only pause the FILE locally -- the mic
             # and the underlying Palabra session keep running (still billed,
             # still translating whatever the mic picks up), so this is a
@@ -1113,7 +1131,7 @@ class MainWindow(QMainWindow):
         # accumulate an unbounded list.
         self._transcript_history.append(event)
         del self._transcript_history[:-300]
-        if event.is_final and self.mode_combo.currentIndex() == 0:  # mic mode only
+        if event.is_final and self._current_mode() == SessionMode.MIC:  # mic mode only
             self._check_loop_repeat(event)
         if self._overlay is not None:
             self._overlay.on_transcript(event)  # overlay applies its own, independent filter
