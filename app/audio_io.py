@@ -115,6 +115,32 @@ def find_virtual_cable(devices: list[DeviceInfo]) -> DeviceInfo | None:
     return None
 
 
+class RealtimePacer:
+    """Paces a fixed-tick loop to real time. Call tick() once per loop
+    iteration where the loop previously advanced anchor_ms and slept; call
+    resync() wherever the loop previously reset anchor/anchor_ms directly
+    (after a pause, a seek, or dropping a stale backlog) instead of waiting
+    for the next tick() to notice it fell behind.
+    """
+
+    def __init__(self, step_ms: float):
+        self._step_ms = step_ms
+        self._anchor = time.monotonic()
+        self._anchor_ms = 0.0
+
+    async def tick(self) -> None:
+        self._anchor_ms += self._step_ms
+        delay = self._anchor + self._anchor_ms / 1000 - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        else:
+            self.resync()
+
+    def resync(self) -> None:
+        self._anchor = time.monotonic()
+        self._anchor_ms = 0.0
+
+
 class MicStream:
     """Captures a microphone as an async stream of 320 ms PCM chunks.
 
@@ -235,8 +261,7 @@ class MicStream:
         # a one-off burst after a stall (that's the backlog cap below, a
         # separate concern: a stall makes chunks late, a fast callback makes
         # them early -- both are handled here, independently).
-        anchor = time.monotonic()
-        anchor_ms = 0.0
+        pacer = RealtimePacer(CHUNK_MS)
         while True:
             if self._paused.is_set():
                 # Drain and discard everything queued so far, not just one item:
@@ -252,8 +277,7 @@ class MicStream:
                         break
                 pending = b""
                 await asyncio.sleep(0.05)
-                anchor = time.monotonic()  # resync -- don't try to "catch up" on paused time
-                anchor_ms = 0.0
+                pacer.resync()  # don't try to "catch up" on paused time
                 continue
             try:
                 pending += self._q.get_nowait()
@@ -277,25 +301,9 @@ class MicStream:
                     break
             if len(pending) > MAX_MIC_BACKLOG_BYTES:
                 pending = pending[-CHUNK_BYTES:]
-                anchor = time.monotonic()  # we just dropped a backlog -- resync instead of pacing off a stale anchor
-                anchor_ms = 0.0
+                pacer.resync()  # we just dropped a backlog -- resync instead of pacing off a stale anchor
             while len(pending) >= CHUNK_BYTES:
-                anchor_ms += CHUNK_MS
-                delay = anchor + anchor_ms / 1000 - time.monotonic()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                else:
-                    # Fell behind real time (a scheduling hiccup, GC pause,
-                    # anything) -- resync instead of racing to catch up.
-                    # Without this, anchor/anchor_ms never recover: every
-                    # later chunk keeps computing delay <= 0 too (anchor_ms
-                    # keeps climbing while anchor stays fixed in the past),
-                    # so pacing silently stops for the rest of the session --
-                    # exactly the persistent, worsening "faster than
-                    # real-time" this pacing was meant to prevent. Same fix
-                    # FileStream already uses for the same reason.
-                    anchor = time.monotonic()
-                    anchor_ms = 0.0
+                await pacer.tick()
                 yield self._apply_gain(pending[:CHUNK_BYTES])
                 pending = pending[CHUNK_BYTES:]
 
@@ -354,16 +362,14 @@ class FileStream:
         # position_ms/seek() are unaffected: both stay clamped to total_ms.
         pcm += bytes(int(BYTES_PER_MS * TRAILING_SILENCE_MS))
         pos = 0
-        anchor = time.monotonic()
-        anchor_ms = 0.0
+        pacer = RealtimePacer(CHUNK_MS)
         while True:
             if self._seek_to_ms is not None:
                 pos = int(self._seek_to_ms * BYTES_PER_MS)
                 pos -= pos % 2  # keep 16-bit sample alignment
                 pos = max(0, min(pos, len(pcm)))
                 self._seek_to_ms = None
-                anchor = time.monotonic()
-                anchor_ms = 0.0
+                pacer.resync()
             if pos >= len(pcm):
                 # checked after the seek above so a seek landing exactly at EOF
                 # (e.g. right as the last chunk was sent) still takes effect
@@ -376,15 +382,7 @@ class FileStream:
             pos += len(chunk)
             self.position_ms = min(pos / BYTES_PER_MS, self.total_ms)
             yield chunk
-            anchor_ms += CHUNK_MS
-            delay = anchor + anchor_ms / 1000 - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            else:
-                # fell behind real time (paused, seeked, or a scheduling hiccup) —
-                # resync instead of bursting out all the chunks we "owe"
-                anchor = time.monotonic()
-                anchor_ms = 0.0
+            await pacer.tick()
         self.position_ms = self.total_ms
 
 
@@ -495,18 +493,10 @@ class MixedSource:
         mic_task = asyncio.create_task(self._pump(self._mic, self._mic_q))
         file_task = asyncio.create_task(self._pump(self._file, self._file_q))
         silence = bytes(CHUNK_BYTES)
-        anchor = time.monotonic()
-        anchor_ms = 0.0
+        pacer = RealtimePacer(CHUNK_MS)
         try:
             while True:
-                anchor_ms += CHUNK_MS
-                delay = anchor + anchor_ms / 1000 - time.monotonic()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                else:
-                    # Same resync-on-behind rationale as MicStream/FileStream.
-                    anchor = time.monotonic()
-                    anchor_ms = 0.0
+                await pacer.tick()
                 try:
                     mic_chunk = self._mic_q.get_nowait()
                 except asyncio.QueueEmpty:
