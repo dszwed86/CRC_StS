@@ -27,6 +27,7 @@ CHUNK_BYTES = CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
 BYTES_PER_MS = RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
 MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
+MAX_OUTPUT_BACKLOG_SAMPLES = int(RATE * 1.2)  # ~1.2s -- see OutputSink.play()
 
 
 @dataclass
@@ -579,6 +580,30 @@ class OutputSink:
             self._q.put_nowait(np.frombuffer(pcm, dtype=np.int16))
         except queue.Full:
             pass  # drop rather than build unbounded latency
+        self._trim_backlog()
+
+    def _trim_backlog(self) -> None:
+        """Caps how far playback can fall behind the live translation.
+
+        Measured live: the server can deliver translated audio for a segment
+        slightly FASTER than that segment's own playback duration (observed
+        ~0.8-0.9x real time). With nothing bounding it, received-but-not-yet-
+        played audio piles up in self._q over the course of a session --
+        text stays live while the voice drifts further and further behind it
+        (the exact "whole sentence, even the next one, is already showing
+        before he's even started speaking it" symptom this was written to
+        fix). queue.Queue's own lock is already safely used from both this
+        thread and the realtime callback thread elsewhere in this class (see
+        _on_playback's get_nowait()), so briefly holding it here to drop the
+        OLDEST queued audio down to MAX_OUTPUT_BACKLOG_SAMPLES is safe --
+        unlike the custom Python lock previously removed from __init__ (see
+        _clear_requested), this doesn't hold a lock across the callback's own
+        blocking work, just a quick internal deque trim.
+        """
+        with self._q.mutex:
+            backlog = sum(len(item) for item in self._q.queue)
+            while backlog > MAX_OUTPUT_BACKLOG_SAMPLES and self._q.queue:
+                backlog -= len(self._q.queue.popleft())
 
     def clear(self) -> None:
         """Drops any buffered-but-not-yet-played audio (e.g. right after a seek).
