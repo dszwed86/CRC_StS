@@ -144,7 +144,8 @@ odtwarzający wciąż tę samą pętlę.
 
 1. Wybierz źródło:
    - **Mikrofon** — konkretne urządzenie z listy.
-   - **Plik** — wskaż plik audio/wideo.
+   - **Plik** — wskaż plik audio/wideo. Uszkodzony, pusty lub nieobsługiwany plik jest wykrywany
+     od razu przy wyborze (czytelny komunikat), zamiast dopiero przy kliknięciu Start.
    - **Mikrofon + Plik** — miksuje oba dźwięki (np. lektor z pliku + osoba mówiąca na żywo) w
      jedno wspólne tłumaczenie, zamiast dwóch osobnych sesji. Zobacz szczegóły tego trybu niżej.
 2. Ustaw język źródłowy i docelowy (domyślnie polski → angielski) oraz opcjonalnie **Głos**:
