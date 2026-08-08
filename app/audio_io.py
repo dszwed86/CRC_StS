@@ -455,8 +455,12 @@ class MixedSource:
       TranslationRunner's normal request_pause()/request_resume() -- i.e.
       the session-level "Pauza" button and the feedback-loop auto-pause
       safety feature -- and pauses/resumes server-side billing along with
-      it, exactly like a paused MicStream/FileStream already does for their
-      own single-source sessions.
+      it. Unlike a standalone paused FileStream, this does NOT freeze the
+      file's own internal timeline -- the file's pump task keeps decoding
+      and advancing position_ms in real time underneath, its output just
+      gets discarded here instead of sent. A whole-session pause therefore
+      skips that stretch of the file rather than preserving it -- only
+      pause_file() (below) preserves position.
     - File-only pause_file()/resume_file(): stops only the file's
       contribution while the mic keeps flowing, used by the separate
       "Pauza pliku" button. This never touches the session at all.
@@ -603,14 +607,19 @@ class MixedSource:
                 yield _mix_pcm(mic_chunk, file_chunk)
         finally:
             mic_task.cancel()
-            if self._file_task is not None:
-                self._file_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await mic_task
-            if self._file_task is not None:
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._file_task
-                self._file_task = None
+            # Holds self._file_lock so this can't race a concurrent set_file()
+            # call: without it, a set_file() suspended awaiting the old
+            # task's cancellation could install a brand new self._file_task
+            # right after this teardown already ran, orphaning it (nothing
+            # would ever cancel it again, since chunks() has already exited).
+            async with self._file_lock:
+                if self._file_task is not None:
+                    self._file_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._file_task
+                    self._file_task = None
 
     async def set_file(self, file: FileStream | None) -> None:
         """Live-swaps the file source: cancels and awaits any existing file

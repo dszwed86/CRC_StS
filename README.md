@@ -182,7 +182,10 @@ nie wpaść w cykl auto-pauza/auto-start odtwarzający wciąż tę samą pętlę
 
 - **Pauza/Wznów** — zawsze wstrzymuje/wznawia **całą sesję** (zatrzymuje też naliczanie po
   stronie Palabry), niezależnie od tego, czy masz wybrany plik. Mikrofon po prostu przestaje
-  wysyłać nowe audio, aż do wznowienia.
+  wysyłać nowe audio, aż do wznowienia. Jeśli masz wybrany plik, ten czas jest z niego
+  **pomijany** (w przeciwieństwie do Pauzy pliku niżej, ta pauza nie zapamiętuje miejsca) —
+  po Wznów plik gra dalej od aktualnej, "przewiniętej" w czasie pozycji, a nie od miejsca
+  sprzed Pauzy.
 - **Pauza pliku/Wznów plik** — osobny przycisk, widoczny tylko gdy masz wybrany plik.
   Wstrzymuje/wznawia **wyłącznie odtwarzanie pliku**, lokalnie — mikrofon zostaje aktywny i
   wciąż tłumaczony (naliczanie u Palabry trwa dalej) przez cały ten czas. Wznawia dokładnie
