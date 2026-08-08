@@ -38,11 +38,20 @@ def probe_audio_file(path: str | Path) -> None:
     Start tries to fully decode it (see load_pcm). Raises ValueError with a
     readable Polish message on failure; returns normally if the file looks
     decodable.
+
+    The .wav checks below (suffix special-case + 16-bit constraint) exist
+    specifically to mirror palabra_ai.audio.load_pcm's own read_wav
+    constraints -- don't "simplify" this into a single av.open() call
+    without re-checking that parity still holds.
     """
     path = Path(path)
     if path.suffix.lower() == ".wav":
         try:
             with wave.open(str(path), "rb") as w:
+                if w.getsampwidth() != 2:
+                    raise ValueError(
+                        f"{path.name}: obsługiwany jest tylko 16-bitowy WAV (plik ma {w.getsampwidth() * 8} bitów)."
+                    )
                 if w.getnframes() == 0:
                     raise ValueError(f"{path.name}: plik WAV nie zawiera dźwięku.")
         except ValueError:
