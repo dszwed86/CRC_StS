@@ -286,7 +286,6 @@ class SessionConfig:
     mic_device: int | None
     output_device: int | None
     file_path: str | None
-    include_mic: bool = True
     mic_gain: float = 1.0
     mic_gate_threshold: float = 0.0
     voice_id: str | None = None
@@ -316,11 +315,6 @@ class SessionWorker(QObject):
         self._mic_device = config.mic_device
         self._output_device = config.output_device
         self._file_path = config.file_path
-        # include_mic distinguishes "no mic at all" (file-only mode) from
-        # "use the mic, and mic_device=None happens to mean the system
-        # default" (mic-only or mixed mode) -- mic_device alone can't tell
-        # those apart, since None is a valid device selection too.
-        self._include_mic = config.include_mic
         self._initial_mic_gain = config.mic_gain
         self._initial_gate_threshold = config.mic_gate_threshold
         self._voice_id = config.voice_id
@@ -328,7 +322,6 @@ class SessionWorker(QObject):
         self._subtitles_only = config.subtitles_only
         self._loop: asyncio.AbstractEventLoop | None = None
         self._runner: TranslationRunner | None = None
-        self._file_source: FileStream | None = None
         self._mic_source: MicStream | None = None
         self._mixed_source: MixedSource | None = None
         # Created here (not in start()) so stop() is safe to call the instant the
@@ -338,11 +331,11 @@ class SessionWorker(QObject):
 
     @property
     def position_ms(self) -> float:
-        return self._file_source.position_ms if self._file_source else 0.0
+        return self._mixed_source.position_ms if self._mixed_source else 0.0
 
     @property
     def total_ms(self) -> float:
-        return self._file_source.total_ms if self._file_source else 0.0
+        return self._mixed_source.total_ms if self._mixed_source else 0.0
 
     def start(self) -> None:
         # WASAPI (the audio backend selected for every device on Windows --
@@ -371,23 +364,16 @@ class SessionWorker(QObject):
             # escaped uncaught, finished.emit() in the finally block below would
             # never run, leaving the GUI thinking a session is still active --
             # Start/Stop stuck forever until the app is restarted.
-            if self._include_mic and self._file_path is not None:
-                mic = MicStream(device=self._mic_device)
-                mic.set_gain(self._initial_mic_gain)
-                mic.set_gate_threshold(self._initial_gate_threshold)
-                self._mic_source = mic
+            mic = MicStream(device=self._mic_device)
+            mic.set_gain(self._initial_mic_gain)
+            mic.set_gate_threshold(self._initial_gate_threshold)
+            self._mic_source = mic
+            file = None
+            if self._file_path is not None:
                 file = FileStream(self._file_path)
-                self._file_source = file
-                source_cm = MixedSource(mic, file)
-                self._mixed_source = source_cm
-            elif self._include_mic:
-                source_cm = MicStream(device=self._mic_device)
-                source_cm.set_gain(self._initial_mic_gain)
-                source_cm.set_gate_threshold(self._initial_gate_threshold)
-                self._mic_source = source_cm
-            else:
-                source_cm = FileStream(self._file_path)
-                self._file_source = source_cm
+                file.pause()  # never autoplay a file that's active at Start
+            source_cm = MixedSource(mic, file)
+            self._mixed_source = source_cm
             with source_cm as source, OutputSink(device=self._output_device) as sink:
                 self._runner = TranslationRunner(
                     api_key=self._api_key,
@@ -1017,7 +1003,6 @@ class MainWindow(QMainWindow):
             mic_device=mic_device,
             output_device=output_device,
             file_path=file_path,
-            include_mic=mic_active,
             mic_gain=self.mic_gain_slider.value() / 100,
             mic_gate_threshold=self.mic_gate_slider.value() / 100,
             voice_id=voice_id,
