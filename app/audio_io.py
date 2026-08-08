@@ -448,15 +448,22 @@ class MixedSource:
     over a pre-recorded narration file, translated together as one
     conversation instead of two separate sessions.
 
-    Pause/resume/seek intentionally do NOT reuse MicStream/FileStream's own
-    pause()/resume() protocol (see pause_file/resume_file below): the mic
-    stays live the entire time, only the file's contribution can be
-    paused/resumed/seeked. Because of that, TranslationRunner's normal
-    request_pause() (which also pauses -- and stops billing on -- the whole
-    server-side session) must never run for this source; the GUI calls
-    SessionWorker.pause_file()/resume_file() instead, which only touch this
-    class directly and never touch the session at all, since the mic is
-    still live and needs the session to keep running normally.
+    Supports two independent pause mechanisms:
+
+    - Whole-session pause()/resume(): stops both mic and file from being fed
+      to the session at all (paced silence otherwise). Used by
+      TranslationRunner's normal request_pause()/request_resume() -- i.e.
+      the session-level "Pauza" button and the feedback-loop auto-pause
+      safety feature -- and pauses/resumes server-side billing along with
+      it, exactly like a paused MicStream/FileStream already does for their
+      own single-source sessions.
+    - File-only pause_file()/resume_file(): stops only the file's
+      contribution while the mic keeps flowing, used by the separate
+      "Pauza pliku" button. This never touches the session at all.
+
+    These two are fully independent: pausing/resuming one never reads or
+    changes the other's state. A file paused via pause_file() stays paused
+    across a whole-session pause()/resume() cycle, and vice versa.
     """
 
     def __init__(self, mic: MicStream, file: FileStream | None = None):
@@ -469,6 +476,10 @@ class MixedSource:
         self._mic_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
         self._file_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4)
         self._file_task: asyncio.Task | None = None
+        self._file_lock = asyncio.Lock()
+        # Whole-session pause -- separate from self._file's own self._paused
+        # (touched by pause_file/resume_file below), see class docstring.
+        self._paused = threading.Event()
 
     def __enter__(self) -> "MixedSource":
         self._mic.__enter__()
@@ -484,6 +495,17 @@ class MixedSource:
         if self._file is not None:
             self._file.__exit__(*exc_info)
         self._mic.__exit__(*exc_info)
+
+    def pause(self) -> None:
+        """Whole-session pause: stops feeding both mic and file to the
+        session. Independent of pause_file()'s own flag -- see class
+        docstring."""
+        self._paused.set()
+
+    def resume(self) -> None:
+        """Whole-session resume. Does NOT touch self._file's own
+        pause_file()/resume_file() state -- see class docstring."""
+        self._paused.clear()
 
     def pause_file(self) -> None:
         if self._file is not None:
@@ -541,12 +563,34 @@ class MixedSource:
         pause_file() must NOT do.
         """
         mic_task = asyncio.create_task(self._pump(self._mic, self._mic_q))
-        if self._file is not None:
+        if self._file is not None and self._file_task is None:
+            # set_file() may have already started a pump task before chunks()
+            # was ever iterated (e.g. a file picked while the session was
+            # still connecting) -- don't overwrite it and orphan it.
             self._file_task = asyncio.create_task(self._pump(self._file, self._file_q))
         silence = bytes(CHUNK_BYTES)
         pacer = RealtimePacer(CHUNK_MS)
         try:
             while True:
+                if self._paused.is_set():
+                    # Whole-session pause: drain and discard everything queued
+                    # so far from both sub-sources (same backlog-draining
+                    # reasoning as MicStream.chunks()), then block here
+                    # without yielding until resumed -- feed()'s `async for`
+                    # simply stalls, exactly like a paused MicStream/FileStream.
+                    while True:
+                        try:
+                            self._mic_q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    while True:
+                        try:
+                            self._file_q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    await asyncio.sleep(0.05)
+                    pacer.resync()  # don't try to "catch up" on paused time
+                    continue
                 await pacer.tick()
                 try:
                     mic_chunk = self._mic_q.get_nowait()
@@ -566,32 +610,38 @@ class MixedSource:
             if self._file_task is not None:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._file_task
+                self._file_task = None
 
     async def set_file(self, file: FileStream | None) -> None:
         """Live-swaps the file source: cancels and awaits any existing file
         pump task, drops any file audio still queued, closes the old
         FileStream (if any), then -- if given a new one -- enters it and
-        starts a fresh pump task for it. Must run on this source's own
-        asyncio loop; chunks() keeps running concurrently on the same loop,
-        so no locking is needed (same reasoning the rest of this class
-        already relies on for its single-event-loop cooperative model).
+        starts a fresh pump task for it.
+
+        Guarded by self._file_lock: this awaits the old pump task's
+        cancellation, which yields control back to the event loop, so two
+        overlapping calls (e.g. the user swaps files twice in quick
+        succession) could otherwise race to set self._file_task and leak
+        whichever one loses. The lock makes overlapping calls serialize
+        instead of interleaving.
         """
-        if self._file_task is not None:
-            self._file_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._file_task
-            self._file_task = None
-        while True:
-            try:
-                self._file_q.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        if self._file is not None:
-            self._file.__exit__(None, None, None)
-        self._file = file
-        if file is not None:
-            file.__enter__()
-            self._file_task = asyncio.create_task(self._pump(self._file, self._file_q))
+        async with self._file_lock:
+            if self._file_task is not None:
+                self._file_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._file_task
+                self._file_task = None
+            while True:
+                try:
+                    self._file_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            if self._file is not None:
+                self._file.__exit__(None, None, None)
+            self._file = file
+            if file is not None:
+                file.__enter__()
+                self._file_task = asyncio.create_task(self._pump(self._file, self._file_q))
 
 
 class OutputSink:

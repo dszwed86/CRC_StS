@@ -5,7 +5,7 @@ Usage (from the project root, with the venv active):
     QT_QPA_PLATFORM=offscreen python scripts/screenshot_gui.py [output.png]
 
 Optional env vars to drive the window into a specific state before the shot:
-    SCREENSHOT_MODE=file       switches the source combo to "Plik"
+    SCREENSHOT_MODE=file       shows the window with a file selected (no Start)
 """
 
 from __future__ import annotations
@@ -34,7 +34,15 @@ def main() -> None:
     window.show()
 
     if os.environ.get("SCREENSHOT_MODE") == "file":
-        window.mode_combo.setCurrentIndex(1)
+        # Mirrors _choose_file()'s pre-Start branch (mode_combo was removed
+        # by the same feature branch this script predates) -- no need for
+        # probe_audio_file() here since the window is never started.
+        window._selected_file = "example.wav"
+        window.file_label.setText(window._selected_file)
+        window.file_clear_btn.setEnabled(True)
+        window.position_slider.setVisible(True)
+        window.position_label.setVisible(True)
+        window.file_pause_btn.setVisible(True)
 
     app.processEvents()
     window.grab().save(str(out))

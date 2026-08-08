@@ -862,6 +862,7 @@ class MainWindow(QMainWindow):
             self._file_paused = True
             self.file_pause_btn.setText("Wznów plik")
             self.file_pause_btn.setEnabled(True)
+            self.position_slider.setEnabled(False)
             self._position_timer.start()
             self._worker.set_file(path)
 
