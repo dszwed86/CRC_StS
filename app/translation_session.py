@@ -159,6 +159,22 @@ class TranslationRunner:
             except Exception as e:
                 self._on_error(f"Nie udało się przełączyć mikrofonu: {e}")
 
+    def set_mute_output(self, muted: bool) -> None:
+        """Live-toggles subtitles-only mode (see __init__'s mute_output for why
+        this never touches the server/billing -- it only routes/withholds
+        already-generated audio locally). Same "plain attribute write, safe
+        without loop marshaling" reasoning as set_mic_gain/set_gate_threshold
+        on MicStream: this is read once per Audio event in run()'s receive
+        loop, no asyncio scheduling needed.
+
+        Muting also clears the sink's own playback queue (like request_seek
+        does) so already-queued audio is cut immediately instead of trailing
+        off for up to the sink's own backlog cap.
+        """
+        self._mute_output = muted
+        if muted and hasattr(self._sink, "clear"):
+            self._sink.clear()
+
     def request_seek(self, position_ms: float) -> None:
         """Jumps a seekable source to position_ms and drops in-flight audio for a clean cut."""
         if not hasattr(self._source, "seek"):
