@@ -441,6 +441,9 @@ class SessionWorker(QObject):
     def change_mic_device(self, device_index: int) -> None:
         self._call_on_loop("request_change_mic_device", device_index)
 
+    def set_file(self, path: str | None) -> None:
+        self._call_on_loop("request_set_file", path)
+
     def pause_file(self) -> None:
         # Deliberately does NOT go through request_pause() / the asyncio loop:
         # MixedSource.pause_file() is a plain thread-safe attribute write

@@ -20,6 +20,8 @@ from typing import Protocol
 from palabra_ai import Audio, Palabra, ServerWarning, Transcript
 from palabra_ai.exc import PalabraError
 
+from .audio_io import FileStream
+
 
 class AudioSource(Protocol):
     def chunks(self): ...  # async generator[bytes]
@@ -158,6 +160,28 @@ class TranslationRunner:
                 self._source.switch_device(device_index)
             except Exception as e:
                 self._on_error(f"Nie udało się przełączyć mikrofonu: {e}")
+
+    def request_set_file(self, path: str | None) -> None:
+        """Live add/change/remove of the mixed file source. No-op if the
+        source doesn't support it (doesn't have set_file -- e.g. a plain
+        MicStream, which no longer occurs in practice now that
+        SessionWorker.start() always builds a MixedSource, but this stays
+        a hasattr check for the same reason request_change_mic_device is
+        one). Must be called from the loop's own thread (e.g. via
+        call_soon_threadsafe).
+        """
+        if not hasattr(self._source, "set_file"):
+            return
+        asyncio.create_task(self._do_set_file(path))
+
+    async def _do_set_file(self, path: str | None) -> None:
+        try:
+            file = FileStream(path) if path is not None else None
+            if file is not None:
+                file.pause()  # never autoplay a freshly added/changed file
+            await self._source.set_file(file)
+        except Exception as e:
+            self._on_error(f"Nie udało się ustawić pliku: {e}")
 
     def set_mute_output(self, muted: bool) -> None:
         """Live-toggles subtitles-only mode (see __init__'s mute_output for why
