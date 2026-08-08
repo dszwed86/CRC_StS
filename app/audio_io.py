@@ -11,6 +11,7 @@ import contextlib
 import queue
 import threading
 import time
+import wave
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,42 @@ BYTES_PER_MS = RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
 MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
 MAX_OUTPUT_BACKLOG_SAMPLES = int(RATE * 1.2)  # ~1.2s -- see OutputSink.play()
+
+
+def probe_audio_file(path: str | Path) -> None:
+    """Quick validity check for a file picked as a translation source --
+    opens/demuxes it without decoding, so a corrupt or non-audio file is
+    caught immediately at selection time instead of only surfacing once
+    Start tries to fully decode it (see load_pcm). Raises ValueError with a
+    readable Polish message on failure; returns normally if the file looks
+    decodable.
+    """
+    path = Path(path)
+    if path.suffix.lower() == ".wav":
+        try:
+            with wave.open(str(path), "rb") as w:
+                if w.getnframes() == 0:
+                    raise ValueError(f"{path.name}: plik WAV nie zawiera dźwięku.")
+        except wave.Error as e:
+            raise ValueError(f"{path.name}: nieprawidłowy plik WAV ({e}).") from e
+        return
+    try:
+        import av
+    except ImportError as e:
+        raise ImportError(f"Sprawdzenie {path.name} wymaga pakietu av: uv add av") from e
+    try:
+        with av.open(str(path)) as container:
+            if not container.streams.audio:
+                raise ValueError(f"{path.name}: plik nie zawiera ścieżki audio.")
+    except ValueError:
+        raise
+    except Exception as e:
+        # av can raise several distinct FFmpeg-backed exception types for a
+        # corrupt/unsupported/unreadable file -- catching broadly here is a
+        # deliberate boundary (this function's whole job is "translate
+        # whatever's wrong with this file into one readable message"),
+        # matching the existing broad except in SessionWorker.start().
+        raise ValueError(f"{path.name}: nie można otworzyć pliku ({e}).") from e
 
 
 @dataclass

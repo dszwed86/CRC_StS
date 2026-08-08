@@ -47,6 +47,7 @@ from .audio_io import (
     is_virtual_cable_name,
     list_input_devices,
     list_output_devices,
+    probe_audio_file,
     rescan_devices,
 )
 from .languages import DEFAULT_SOURCE, DEFAULT_TARGET, SOURCE_LANGUAGES, TARGET_LANGUAGES
@@ -882,9 +883,15 @@ class MainWindow(QMainWindow):
             "",
             "Audio/Video (*.wav *.mp3 *.mp4 *.mov *.m4a *.flac *.ogg *.mkv *.avi *.webm *.wmv *.flv *.aac *.ts);;Wszystkie pliki (*)",
         )
-        if path:
-            self._selected_file = path
-            self.file_label.setText(path)
+        if not path:
+            return
+        try:
+            probe_audio_file(path)
+        except (ValueError, ImportError) as e:
+            QMessageBox.warning(self, "Nieprawidłowy plik", str(e))
+            return
+        self._selected_file = path
+        self.file_label.setText(path)
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
