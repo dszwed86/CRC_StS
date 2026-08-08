@@ -156,7 +156,10 @@ class MicStream:
         self._paused = threading.Event()
         self._gain = 1.0
         self._gate_threshold = 0.0
-        self._stream = sd.RawInputStream(
+        self._stream = self._open_stream(device)
+
+    def _open_stream(self, device: int | None) -> sd.RawInputStream:
+        return sd.RawInputStream(
             samplerate=RATE,
             channels=CHANNELS,
             dtype="int16",
@@ -201,14 +204,7 @@ class MicStream:
         MicStream (SessionWorker's background thread, which has COM
         initialized on Windows for WASAPI -- see SessionWorker.start()).
         """
-        new_stream = sd.RawInputStream(
-            samplerate=RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            device=new_device,
-            callback=self._on_audio,
-            extra_settings=_wasapi_extra_settings(),
-        )
+        new_stream = self._open_stream(new_device)
         new_stream.start()
         old_stream = self._stream
         self._stream = new_stream
