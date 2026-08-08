@@ -124,31 +124,31 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
    zawiera "CABLE" lub "BlackHole"; w przeciwnym razie wybierz je ręcznie z listy.)
 5. Miernik poziomu przy nowym źródle w OBS powinien reagować, gdy aplikacja tłumaczy mowę.
 
-**Ochrona przed pętlą sprzężenia zwrotnego** — w trybach z aktywnym mikrofonem (**Mikrofon**,
-**Mikrofon + Plik**), jeśli wybrane "Wyjście (do OBS)" nie wygląda na wirtualny kabel (np. to
-zwykłe głośniki), aplikacja przy Start pokazuje ostrzeżenie i pyta, czy kontynuować. Powód: jeśli
-mikrofon może usłyszeć to, co gra z wybranego wyjścia, tłumaczenie samo siebie usłyszy i zacznie
-tłumaczyć własny wynik w kółko — to samo zdanie powtarzające się bez końca w logu, aż do ręcznego
-Stop (zaobserwowane naprawdę: mikrofon złapał dźwięk z głośnika mimo sporej odległości). Tryb
-Plik (bez mikrofonu) nigdy nie otwiera mikrofonu, więc tego ostrzeżenia tam nie ma.
+**Ochrona przed pętlą sprzężenia zwrotnego** — mikrofon jest zawsze aktywny w trakcie sesji
+(niezależnie od tego, czy dodasz też plik), więc jeśli wybrane "Wyjście (do OBS)" nie wygląda na
+wirtualny kabel (np. to zwykłe głośniki), aplikacja przy Start pokazuje ostrzeżenie i pyta, czy
+kontynuować. Powód: jeśli mikrofon może usłyszeć to, co gra z wybranego wyjścia, tłumaczenie samo
+siebie usłyszy i zacznie tłumaczyć własny wynik w kółko — to samo zdanie powtarzające się bez
+końca w logu, aż do ręcznego Stop (zaobserwowane naprawdę: mikrofon złapał dźwięk z głośnika mimo
+sporej odległości).
 
 **Automatyczna Pauza przy wykrytej pętli** — dodatkowe zabezpieczenie działające już w trakcie
-sesji (nie tylko przy Start), również tylko w trybach z aktywnym mikrofonem: jeśli to samo
-(finalne) tłumaczenie powtórzy się **3 razy z rzędu** w odstępach krótszych niż 15 sekund,
-aplikacja sama wciska Pauzę (zatrzymuje też naliczanie u Palabry) i pokazuje okno z wyjaśnieniem.
-Celowo **nie wznawia się sama** — wymaga ręcznego kliknięcia Wznów po naprawieniu przyczyny
-(słuchawki, inne wyjście, Próg czułości mikrofonu), żeby nie wpaść w cykl auto-pauza/auto-start
-odtwarzający wciąż tę samą pętlę.
+sesji (nie tylko przy Start): jeśli to samo (finalne) tłumaczenie powtórzy się **3 razy z rzędu**
+w odstępach krótszych niż 15 sekund, aplikacja sama wciska Pauzę (zatrzymuje też naliczanie u
+Palabry) i pokazuje okno z wyjaśnieniem. Celowo **nie wznawia się sama** — wymaga ręcznego
+kliknięcia Wznów po naprawieniu przyczyny (słuchawki, inne wyjście, Próg czułości mikrofonu), żeby
+nie wpaść w cykl auto-pauza/auto-start odtwarzający wciąż tę samą pętlę.
 
 ## Użycie
 
-1. Wybierz źródło:
-   - **Mikrofon** — konkretne urządzenie z listy.
-   - **Plik** — wskaż plik audio/wideo. Uszkodzony, pusty lub nieobsługiwany plik jest wykrywany
-     od razu przy wyborze (czytelny komunikat), zamiast dopiero przy kliknięciu Start.
-   - **Mikrofon + Plik** — miksuje oba dźwięki (np. lektor z pliku + osoba mówiąca na żywo) w
-     jedno wspólne tłumaczenie, zamiast dwóch osobnych sesji. Zobacz szczegóły tego trybu niżej.
-2. Ustaw język źródłowy i docelowy (domyślnie polski → angielski) oraz opcjonalnie **Głos**:
+1. Wybierz mikrofon z listy — jest zawsze aktywny w trakcie sesji, niezależnie od tego, czy
+   dodasz też plik.
+2. Opcjonalnie dodaj plik audio/wideo do zmiksowania z mikrofonem, przyciskiem **"Wybierz
+   plik..."** w sekcji "Plik (opcjonalnie)". Uszkodzony, pusty lub nieobsługiwany plik jest
+   wykrywany od razu przy wyborze (czytelny komunikat), zamiast dopiero przy kliknięciu Start.
+   Przycisk **✕** obok usuwa wybrany plik. Oba działania — wybór i usunięcie pliku — działają
+   też **w trakcie trwającej sesji**, nie tylko przed Start; zobacz szczegóły niżej.
+3. Ustaw język źródłowy i docelowy (domyślnie polski → angielski) oraz opcjonalnie **Głos**:
    - **Domyślny (auto)** — serwer sam dobiera głos.
    - **default_low** / **default_high** — wbudowane głosy ogólne (niższy/wyższy).
    - **Klonowanie głosu mówcy (eksperymentalne)** — tłumaczenie brzmi głosem osoby mówiącej
@@ -173,23 +173,37 @@ odtwarzający wciąż tę samą pętlę.
    natychmiast wycisza dźwięk (łącznie z tym, co akurat czeka w kolejce odtwarzania), a
    odznaczenie w trakcie sesji, przy aktywnym mikrofonie i wyjściu niewyglądającym na wirtualny
    kabel, pokazuje to samo ostrzeżenie o pętli sprzężenia co przy Start.
-3. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie.
-4. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
+4. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie. Jeśli
+   masz wybrany plik, nie zaczyna się on odtwarzać automatycznie — patrz niżej.
+5. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
    przed zamknięciem połączenia.
 
-**Pauza/Wznów** — w trybach **Plik** i **Mikrofon** wstrzymuje/wznawia całe tłumaczenie
-(zatrzymuje też naliczanie po stronie Palabry). W trybie **Plik** wznawia dokładnie od tego
-samego miejsca; w trybie **Mikrofon** po prostu przestaje wysyłać nowe audio, aż do wznowienia.
-W trybie **Mikrofon + Plik** Pauza dotyczy **tylko pliku** — mikrofon zostaje aktywny i wciąż
-tłumaczony (naliczanie trwa dalej) przez cały czas, patrz sekcja niżej.
+**Dwa niezależne przyciski pauzy:**
 
-W trybach **Plik** oraz **Mikrofon + Plik** dodatkowo:
+- **Pauza/Wznów** — zawsze wstrzymuje/wznawia **całą sesję** (zatrzymuje też naliczanie po
+  stronie Palabry), niezależnie od tego, czy masz wybrany plik. Mikrofon po prostu przestaje
+  wysyłać nowe audio, aż do wznowienia.
+- **Pauza pliku/Wznów plik** — osobny przycisk, widoczny tylko gdy masz wybrany plik.
+  Wstrzymuje/wznawia **wyłącznie odtwarzanie pliku**, lokalnie — mikrofon zostaje aktywny i
+  wciąż tłumaczony (naliczanie u Palabry trwa dalej) przez cały ten czas. Wznawia dokładnie
+  od tego samego miejsca w pliku.
 
+**Plik — zawsze widoczny, opcjonalny, można zmieniać w trakcie sesji:**
+
+- **Nowo wybrany/zmieniony plik zawsze zaczyna wstrzymany** — czy to wybrany przed kliknięciem
+  Start, czy dodany/zmieniony w trakcie trwającej sesji, plik nigdy nie zaczyna grać sam;
+  trzeba kliknąć **Pauza pliku/Wznów plik**, żeby go uruchomić.
+- **Dodawanie, zmiana i usuwanie pliku działają też w trakcie trwającej sesji** — przycisk
+  **"Wybierz plik..."** w dowolnym momencie podmienia (lub dodaje) plik bez przerywania ani
+  restartowania sesji; **✕** usuwa go, a mikrofon leci dalej bez przerwy. To czysto lokalna
+  zmiana źródła audio (serwer Palabra nie wie, że plik się zmienił) — bez ryzyka błędów API.
 - **Suwak pozycji** — pokazuje aktualny czas odtwarzania pliku; przeciągnięcie i puszczenie
-  przewija plik do wskazanego momentu (pomijając to, co było przed/po). W trybie Mikrofon + Plik
-  dotyczy wyłącznie ścieżki pliku, mikrofon nie jest tym przewijaniem w żaden sposób dotknięty.
+  przewija plik do wskazanego momentu (pomijając to, co było przed/po). Dotyczy wyłącznie
+  ścieżki pliku, mikrofon nie jest tym przewijaniem w żaden sposób dotknięty.
+- **Gdy plik się skończy, sesja leci dalej na samym mikrofonie** — nie zatrzymuje się
+  automatycznie; trzeba kliknąć Stop ręcznie.
 
-W trybach **Mikrofon** oraz **Mikrofon + Plik** dodatkowo:
+**Mikrofon — zawsze aktywny w trakcie sesji, niezależnie od pliku:**
 
 - **Zmiana mikrofonu w trakcie sesji** — lista wyboru mikrofonu (inaczej niż reszta ustawień)
   zostaje aktywna także po kliknięciu Start. Wybór innego urządzenia z listy przełącza na nie
@@ -207,21 +221,6 @@ W trybach **Mikrofon** oraz **Mikrofon + Plik** dodatkowo:
   cichszą mowę. Pomaga odciąć ciche, odległe dźwięki — w tym własne tłumaczenie dobiegające
   z głośnika, patrz ochrona przed pętlą sprzężenia zwrotnego wyżej — zacznij od niskiej
   wartości (15–20%) i zwiększaj tylko w razie potrzeby.
-
-### Tryb Mikrofon + Plik
-
-Miksuje dźwięk z mikrofonu i z pliku w **jedno wspólne tłumaczenie** (jedna sesja Palabra),
-zamiast dwóch osobnych — przydatne np. gdy lektor czyta z pliku, a druga osoba dogaduje coś
-na żywo przez mikrofon, i oba głosy mają trafić do tego samego strumienia napisów/audio.
-
-- Oba źródła są sumowane próbka po próbce (proste miksowanie, bez obniżania głośności
-  żadnego z nich osobno) i wysyłane do Palabry jako jeden strumień audio.
-- **Pauza dotyczy tylko pliku** — mikrofon zostaje aktywny i wciąż tłumaczony (naliczanie
-  u Palabry trwa dalej) przez cały czas trwania sesji, niezależnie od stanu pauzy pliku.
-- **Gdy plik się skończy, sesja leci dalej na samym mikrofonie** — nie zatrzymuje się
-  automatycznie; trzeba kliknąć Stop ręcznie, tak jak w zwykłym trybie Mikrofon.
-- Ochrona przed pętlą sprzężenia zwrotnego (ostrzeżenie przy Start i automatyczna Pauza w
-  trakcie sesji) działa tak samo jak w trybie Mikrofon, bo mikrofon jest tu tak samo aktywny.
 
 **Odśwież urządzenia** — przycisk obok wyboru mikrofonu ponownie skanuje sprzęt audio, więc
 mikrofon podłączony *po* uruchomieniu aplikacji też się pojawi na liście (bez restartu apki).
