@@ -647,13 +647,20 @@ class MainWindow(QMainWindow):
         playback_layout = QHBoxLayout(self.playback_row)
         playback_layout.setContentsMargins(0, 0, 0, 0)
         self.pause_btn = QPushButton("Pauza")
+        self.pause_btn.setToolTip("Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku.")
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._on_pause_resume)
+        self.file_pause_btn = QPushButton("Pauza pliku")
+        self.file_pause_btn.setToolTip("Wstrzymuje/wznawia tylko plik -- mikrofon i reszta sesji nie są tym dotknięte.")
+        self.file_pause_btn.setVisible(False)
+        self.file_pause_btn.setEnabled(False)
+        self.file_pause_btn.clicked.connect(self._on_file_pause_resume)
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
         self.position_slider.setEnabled(False)
         self.position_slider.sliderReleased.connect(self._on_seek)
         self.position_label = QLabel("00:00 / 00:00")
         playback_layout.addWidget(self.pause_btn)
+        playback_layout.addWidget(self.file_pause_btn)
         playback_layout.addWidget(self.position_slider, stretch=1)
         playback_layout.addWidget(self.position_label)
         root.addWidget(self.playback_row)
@@ -667,6 +674,7 @@ class MainWindow(QMainWindow):
         self._position_timer.setInterval(250)
         self._position_timer.timeout.connect(self._update_position)
         self._is_paused = False
+        self._file_paused = False
         self._pause_request_pending = False
         self._partial_line_active = False  # last log line is a growing, not-yet-final transcript
         self._show_lang_tags = True
@@ -894,7 +902,7 @@ class MainWindow(QMainWindow):
         it's safe to proceed (not risky, or the user chose to continue
         anyway), False if the user declined.
         """
-        mic_active = self._current_mode().has_mic
+        mic_active = True
         if not mic_active or self.subtitles_only_check.isChecked():
             return True
         output_name = self.output_combo.currentText()
@@ -927,9 +935,8 @@ class MainWindow(QMainWindow):
             self._open_settings()
             return
 
-        mode = self._current_mode()
-        mic_active = mode.has_mic
-        needs_file = mode.has_file
+        mic_active = True
+        needs_file = self._selected_file is not None
         file_path = self._selected_file if needs_file else None
         if needs_file and not file_path:
             QMessageBox.warning(self, "Brak pliku", "Wybierz plik audio/wideo do przetłumaczenia.")
@@ -994,8 +1001,14 @@ class MainWindow(QMainWindow):
         thread.start()
         self.start_stop_btn.setText("Stop")
         self._set_config_enabled(False)
-        if needs_file:
+        if self._selected_file is not None:
+            self._file_paused = True
+            self.file_pause_btn.setText("Wznów plik")
+            self.file_pause_btn.setEnabled(True)
             self._position_timer.start()
+        else:
+            self._file_paused = False
+            self.file_pause_btn.setEnabled(False)
 
     def _on_subtitles_only_toggled(self, checked: bool) -> None:
         # Turning audio back ON (unchecking) mid-session under risky
@@ -1020,7 +1033,7 @@ class MainWindow(QMainWindow):
         elif state == SessionState.RUNNING:
             self._is_paused = False
             self.pause_btn.setText("Pauza")
-            self.pause_btn.setEnabled(True)  # works for both mic and file mode now
+            self.pause_btn.setEnabled(True)
         # Re-enabling controls happens in _on_worker_finished(), NOT here:
         # state_changed(STOPPED/ERROR) is emitted from inside TranslationRunner.run(),
         # while the mic/output device is still being released by the `with` block
@@ -1037,34 +1050,36 @@ class MainWindow(QMainWindow):
         self._is_paused = False
         self.pause_btn.setText("Pauza")
         self.pause_btn.setEnabled(False)
+        self._file_paused = False
+        self.file_pause_btn.setText("Pauza pliku")
+        self.file_pause_btn.setEnabled(False)
         self.position_slider.setEnabled(False)
         self.position_slider.setValue(0)
         self.position_label.setText("00:00 / 00:00")
 
     def _on_pause_resume(self) -> None:
-        if self._worker is None:
-            return
-        if self._current_mode() == SessionMode.MIC_AND_FILE:
-            # Mixed mode: Pauza/Wznów only pause the FILE locally -- the mic
-            # and the underlying Palabra session keep running (still billed,
-            # still translating whatever the mic picks up), so this is a
-            # plain synchronous call on SessionWorker, not the server-side
-            # pause/resume path below (which would stop the whole session).
-            self._is_paused = not self._is_paused
-            if self._is_paused:
-                self._worker.pause_file()
-                self.pause_btn.setText("Wznów")
-            else:
-                self._worker.resume_file()
-                self.pause_btn.setText("Pauza")
-            return
-        if self._pause_request_pending:
+        if self._worker is None or self._pause_request_pending:
             return
         self._pause_request_pending = True
         if self._is_paused:
             self._worker.resume()
         else:
             self._worker.pause()
+
+    def _on_file_pause_resume(self) -> None:
+        # Fully independent of _on_pause_resume/_is_paused: this only ever
+        # touches the file locally (SessionWorker.pause_file()/resume_file()),
+        # never the server-side session, so there's no _pause_request_pending
+        # guard needed here either -- same reasoning as pause_file() itself.
+        if self._worker is None or self._selected_file is None:
+            return
+        self._file_paused = not self._file_paused
+        if self._file_paused:
+            self._worker.pause_file()
+            self.file_pause_btn.setText("Wznów plik")
+        else:
+            self._worker.resume_file()
+            self.file_pause_btn.setText("Pauza pliku")
 
     def _on_seek(self) -> None:
         if self._worker is not None:
