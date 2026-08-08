@@ -623,6 +623,7 @@ class MainWindow(QMainWindow):
             "koszt sesji się nie zmienia -- to tylko wycisza odtwarzanie po stronie aplikacji."
         )
         form.addRow("", self.subtitles_only_check)
+        self.subtitles_only_check.toggled.connect(self._on_subtitles_only_toggled)
 
         self.source_lang_combo = QComboBox()
         for code, name in SOURCE_LANGUAGES:
@@ -743,12 +744,15 @@ class MainWindow(QMainWindow):
         # all (it's purely local device I/O, see MicStream.switch_device), so
         # it stays enabled and live-switchable during a running Mikrofon
         # session; see _on_mic_selection_changed.
+        # subtitles_only_check is deliberately NOT in this list -- like
+        # mic_combo, it stays live-toggleable during a running session (see
+        # _on_subtitles_only_toggled): muting/unmuting playback is purely
+        # local, never touches the server session.
         self._config_widgets = [
             self.settings_btn,
             self.mode_combo,
             self.file_btn,
             self.output_combo,
-            self.subtitles_only_check,
             self.source_lang_combo,
             self.target_lang_combo,
             self.voice_combo,
@@ -896,6 +900,37 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.set_gate_threshold(value / 100)
 
+    def _confirm_feedback_loop_risk(self) -> bool:
+        """A live mic can physically pick this app's own output back up
+        (e.g. it's routed to real speakers instead of a virtual cable) and
+        re-translate it endlessly -- confirmed live: the exact same sentence
+        repeating in the log over and over until Stop was clicked. Shared
+        between the Start button and the live "Tylko napisy" toggle (turning
+        audio back on mid-session carries the same risk). Returns True if
+        it's safe to proceed (not risky, or the user chose to continue
+        anyway), False if the user declined.
+        """
+        mode_idx = self.mode_combo.currentIndex()
+        mic_active = mode_idx in (0, 2)
+        if not mic_active or self.subtitles_only_check.isChecked():
+            return True
+        output_name = self.output_combo.currentText()
+        if is_virtual_cable_name(output_name):
+            return True
+        answer = QMessageBox.warning(
+            self,
+            "Wybrane wyjście może spowodować pętlę sprzężenia",
+            f'Wybrane urządzenie wyjściowe ("{output_name}") nie wygląda na wirtualny '
+            "kabel audio (VB-Cable / BlackHole).\n\n"
+            "Jeśli mikrofon może usłyszeć ten dźwięk (np. przez głośniki), tłumaczenie "
+            "może wpaść w pętlę sprzężenia zwrotnego — to samo zdanie tłumaczone w kółko, "
+            "aż do ręcznego zatrzymania.\n\n"
+            "Kontynuować mimo to?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def _on_start_stop(self) -> None:
         if self._worker is not None:
             self.start_stop_btn.setEnabled(False)
@@ -920,30 +955,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Brak urządzenia wyjściowego", "System nie zgłasza żadnego urządzenia audio wyjściowego.")
             return
 
-        # Loop-protection: a live mic can physically pick this app's own
-        # output back up (e.g. it's routed to real speakers instead of a
-        # virtual cable) and re-translate it endlessly -- confirmed live:
-        # the exact same sentence repeating in the log over and over until
-        # Stop was clicked. File-only mode never opens a mic (see
-        # SessionWorker.start()), so it can't feed back this way -- and
-        # neither can subtitles-only mode, since no audio is ever played.
-        if mic_active and not self.subtitles_only_check.isChecked():
-            output_name = self.output_combo.currentText()
-            if not is_virtual_cable_name(output_name):
-                answer = QMessageBox.warning(
-                    self,
-                    "Wybrane wyjście może spowodować pętlę sprzężenia",
-                    f'Wybrane urządzenie wyjściowe ("{output_name}") nie wygląda na wirtualny '
-                    "kabel audio (VB-Cable / BlackHole).\n\n"
-                    "Jeśli mikrofon może usłyszeć ten dźwięk (np. przez głośniki), tłumaczenie "
-                    "może wpaść w pętlę sprzężenia zwrotnego — to samo zdanie tłumaczone w kółko, "
-                    "aż do ręcznego zatrzymania.\n\n"
-                    "Kontynuować mimo to?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if answer == QMessageBox.StandardButton.No:
-                    return
+        # Loop-protection: see _confirm_feedback_loop_risk's docstring.
+        if not self._confirm_feedback_loop_risk():
+            return
 
         mic_device = self.mic_combo.currentData() if mic_active else None
         output_device = self.output_combo.currentData()
@@ -1000,6 +1014,20 @@ class MainWindow(QMainWindow):
         self._set_config_enabled(False)
         if needs_file:
             self._position_timer.start()
+
+    def _on_subtitles_only_toggled(self, checked: bool) -> None:
+        # Turning audio back ON (unchecking) mid-session under risky
+        # conditions needs the same confirmation Start already requires --
+        # but only mid-session: before Start, _on_start_stop's own call to
+        # _confirm_feedback_loop_risk() already covers it, so warning here
+        # too (with no worker yet) would double up on the same check.
+        if self._worker is not None and not checked and not self._confirm_feedback_loop_risk():
+            self.subtitles_only_check.blockSignals(True)
+            self.subtitles_only_check.setChecked(True)
+            self.subtitles_only_check.blockSignals(False)
+            return
+        if self._worker is not None:
+            self._worker.set_subtitles_only(checked)
 
     def _on_state(self, state: SessionState) -> None:
         self._pause_request_pending = False
