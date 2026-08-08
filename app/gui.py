@@ -460,6 +460,13 @@ class SessionWorker(QObject):
         if self._mic_source is not None:
             self._mic_source.set_gate_threshold(threshold)
 
+    def set_subtitles_only(self, muted: bool) -> None:
+        # Plain passthrough -- TranslationRunner.set_mute_output() is itself
+        # a thread-safe direct call (see its docstring), no _call_on_loop
+        # marshaling needed, same as set_mic_gain/set_gate_threshold above.
+        if self._runner is not None:
+            self._runner.set_mute_output(muted)
+
 
 _STATE_LABELS = {
     SessionState.CONNECTING: "Łączenie...",
