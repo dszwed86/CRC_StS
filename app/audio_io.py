@@ -45,8 +45,10 @@ def probe_audio_file(path: str | Path) -> None:
             with wave.open(str(path), "rb") as w:
                 if w.getnframes() == 0:
                     raise ValueError(f"{path.name}: plik WAV nie zawiera dźwięku.")
-        except wave.Error as e:
-            raise ValueError(f"{path.name}: nieprawidłowy plik WAV ({e}).") from e
+        except ValueError:
+            raise
+        except (wave.Error, OSError) as e:
+            raise ValueError(f"{path.name}: nie można otworzyć pliku ({e}).") from e
         return
     try:
         import av
