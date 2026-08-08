@@ -567,6 +567,32 @@ class MixedSource:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._file_task
 
+    async def set_file(self, file: FileStream | None) -> None:
+        """Live-swaps the file source: cancels and awaits any existing file
+        pump task, drops any file audio still queued, closes the old
+        FileStream (if any), then -- if given a new one -- enters it and
+        starts a fresh pump task for it. Must run on this source's own
+        asyncio loop; chunks() keeps running concurrently on the same loop,
+        so no locking is needed (same reasoning the rest of this class
+        already relies on for its single-event-loop cooperative model).
+        """
+        if self._file_task is not None:
+            self._file_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._file_task
+            self._file_task = None
+        while True:
+            try:
+                self._file_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        if self._file is not None:
+            self._file.__exit__(None, None, None)
+        self._file = file
+        if file is not None:
+            file.__enter__()
+            self._file_task = asyncio.create_task(self._pump(self._file, self._file_q))
+
 
 class OutputSink:
     """Plays received PCM chunks to a chosen output device (e.g. a virtual cable)."""
