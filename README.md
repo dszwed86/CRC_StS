@@ -168,6 +168,10 @@ odtwarzający wciąż tę samą pętlę.
    odtwarzanie po stronie aplikacji, przydatne gdy zależy Ci wyłącznie na napisach do OBS.
    Przy włączonym trybie ostrzeżenie o pętli sprzężenia zwrotnego (patrz niżej) się nie
    pojawia — skoro żaden dźwięk nie jest odtwarzany, mikrofon nie ma czego złapać.
+   **Można to przełączać także w trakcie trwającej sesji**, nie tylko przed Start — zaznaczenie
+   natychmiast wycisza dźwięk (łącznie z tym, co akurat czeka w kolejce odtwarzania), a
+   odznaczenie w trakcie sesji, przy aktywnym mikrofonie i wyjściu niewyglądającym na wirtualny
+   kabel, pokazuje to samo ostrzeżenie o pętli sprzężenia co przy Start.
 3. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie.
 4. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
    przed zamknięciem połączenia.
