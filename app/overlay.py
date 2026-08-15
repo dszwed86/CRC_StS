@@ -126,6 +126,12 @@ class OverlayWindow(QWidget):
 
         self._grip = QSizeGrip(self)
         self._lines: list[str] = []
+        # Parallel to _lines (kept in lockstep, including trimming) so a
+        # repeated sentence can be collapsed into the RIGHT line even when
+        # the two kinds (source/translation) interleave with the overlay
+        # filter set to "both" -- the last-appended line isn't necessarily
+        # this kind's line. None marks the placeholder sample line.
+        self._line_kinds: list[bool | None] = []
         self._partial_line_active = False
         # Merges consecutive sentences into the same visual line when they
         # follow each other closely (continuing the same thought) instead of
@@ -137,6 +143,19 @@ class OverlayWindow(QWidget):
         self._last_final_is_translation: bool | None = None
         self._merging = False  # locked in per-sentence so a slow-to-finalize
         # sentence's growing text doesn't visually "un-merge" mid-way through
+        # Collapses a finalized sentence that repeats the immediately
+        # preceding finalized sentence of the same kind into a trailing
+        # "xN" counter instead of re-appending/re-merging the same text --
+        # see on_transcript()'s repeat check, which runs before (and takes
+        # priority over) the paragraph-merge logic above. _repeat_prefix
+        # holds whatever paragraph text came before that repeating sentence
+        # (e.g. "Witam wszystkich." if it was merged onto an earlier
+        # sentence, "" if it started its own line) so a repeat can rebuild
+        # the correct display text (prefix + sentence + counter) even after
+        # the merge-preview logic above has already overwritten the line
+        # with a live-growing (and, for a repeat, wrong) partial preview.
+        self._repeat_state: dict[bool, tuple[str | None, int]] = {True: (None, 0), False: (None, 0)}
+        self._repeat_prefix: dict[bool, str] = {True: "", False: ""}
 
         self._apply_style()
         if saved["shadow_enabled"]:
@@ -236,6 +255,7 @@ class OverlayWindow(QWidget):
         if self._lines:
             return
         self._lines = [SAMPLE_TEXT]
+        self._line_kinds = [None]
         self._partial_line_active = False
         self._showing_sample = True
         self._render()
@@ -245,11 +265,14 @@ class OverlayWindow(QWidget):
         but only if no real transcript has arrived to replace it in the meantime."""
         if self._showing_sample:
             self._lines = []
+            self._line_kinds = []
             self._partial_line_active = False
             self._showing_sample = False
             self._paragraph_base = ""
             self._last_final_time = None
             self._last_final_is_translation = None
+            self._repeat_state = {True: (None, 0), False: (None, 0)}
+            self._repeat_prefix = {True: "", False: ""}
             self._render()
 
     def _apply_style(self) -> None:
@@ -277,10 +300,56 @@ class OverlayWindow(QWidget):
             return
         if self._showing_sample:
             self._lines = []
+            self._line_kinds = []
             self._showing_sample = False
             self._paragraph_base = ""
             self._last_final_time = None
             self._last_final_is_translation = None
+            self._repeat_state = {True: (None, 0), False: (None, 0)}
+            self._repeat_prefix = {True: "", False: ""}
+
+        # Repeat detection takes priority over (runs before) paragraph
+        # merging below: a repeated sentence must never get re-appended or
+        # re-merged into the text, it only bumps a trailing "xN" counter on
+        # whatever is currently shown. Only finalized sentences are compared
+        # (mirrors the same "finals only" precedent used elsewhere). Checked
+        # on EVERY final, even one sealing an already-growing partial: a
+        # repeated sentence very often arrives as a growing partial (live
+        # ASR builds it up word by word) that the merge-preview logic below
+        # will have already merged into the display as a live guess -- by
+        # the time it finalizes as a confirmed repeat, that preview must be
+        # overwritten with the correct prefix+sentence+counter text, not
+        # left as whatever the in-progress guess looked like.
+        if event.is_final:
+            normalized = event.text.strip()
+            prev_text, prev_count = self._repeat_state[event.is_translation]
+            if normalized and normalized == prev_text:
+                # Find THIS kind's own line, not necessarily the last one --
+                # with the overlay filter set to "both", source/translation
+                # lines interleave, so the widget's last line can belong to
+                # the other kind.
+                idx = next(
+                    (i for i in range(len(self._lines) - 1, -1, -1) if self._line_kinds[i] == event.is_translation),
+                    None,
+                )
+                if idx is not None:
+                    count = prev_count + 1
+                    self._repeat_state[event.is_translation] = (normalized, count)
+                    prefix = self._repeat_prefix[event.is_translation]
+                    sep = " " if prefix else ""
+                    self._lines[idx] = f"{prefix}{sep}{normalized} x{count}"
+                    if idx == len(self._lines) - 1:
+                        # Only keep the paragraph-merge bookkeeping in sync
+                        # when the repeat landed on the actual last line --
+                        # otherwise this repeat is on an earlier, different-
+                        # kind line and must not affect what the *next*
+                        # sentence merges onto.
+                        self._paragraph_base = self._lines[idx]
+                        self._last_final_time = event.timestamp
+                        self._last_final_is_translation = event.is_translation
+                    self._partial_line_active = False
+                    self._render()
+                    return
 
         # The event's own creation time, not time.monotonic() captured here:
         # replaying history (e.g. backfilling an overlay opened mid-session)
@@ -309,18 +378,29 @@ class OverlayWindow(QWidget):
                 and len(self._paragraph_base) < MAX_PARAGRAPH_CHARS
             )
 
+        # Captured before _paragraph_base is overwritten below: whatever
+        # paragraph text this sentence is merging onto (or "" if it's
+        # starting its own line) -- see _repeat_prefix's declaration.
+        prefix_before = self._paragraph_base if self._merging else ""
         text = f"{self._paragraph_base} {event.text}" if self._merging else event.text
         if starting_new_sentence and not self._merging:
             self._lines.append(text)
+            self._line_kinds.append(event.is_translation)
         else:
             self._lines[-1] = text
+            # _line_kinds[-1] is already the right kind: merging only ever
+            # happens onto a same-kind line (see the merge-eligibility check
+            # above), and a growing partial never changes kind mid-segment.
 
         if event.is_final:
             self._paragraph_base = text
             self._last_final_time = now
             self._last_final_is_translation = event.is_translation
+            self._repeat_state[event.is_translation] = (event.text.strip(), 1)
+            self._repeat_prefix[event.is_translation] = prefix_before
         self._partial_line_active = not event.is_final
         del self._lines[:-MAX_LINES]
+        del self._line_kinds[:-MAX_LINES]
         self._render()
 
     def _render(self) -> None:
@@ -333,11 +413,14 @@ class OverlayWindow(QWidget):
 
     def clear(self) -> None:
         self._lines = []
+        self._line_kinds = []
         self._partial_line_active = False
         self._showing_sample = False
         self._paragraph_base = ""
         self._last_final_time = None
         self._last_final_is_translation = None
+        self._repeat_state = {True: (None, 0), False: (None, 0)}
+        self._repeat_prefix = {True: "", False: ""}
         self._render()
 
     # --- window chrome: drag-to-move + right-click settings --------------

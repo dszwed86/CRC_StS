@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QTextCursor
+from PySide6.QtGui import QDesktopServices, QTextBlock, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -43,7 +43,6 @@ from .audio_io import (
     MixedSource,
     OutputSink,
     find_virtual_cable,
-    is_virtual_cable_name,
     list_input_devices,
     list_output_devices,
     probe_audio_file,
@@ -472,15 +471,6 @@ _STATE_LABELS = {
     SessionState.ERROR: "Błąd",
 }
 
-# Feedback-loop auto-pause (see _on_transcript): the same
-# final (source or translation) text repeating this many times in a row,
-# within this many seconds of each other, is treated as a probable feedback
-# loop (real speech essentially never repeats a whole sentence verbatim this
-# many times back to back) rather than a coincidence.
-LOOP_REPEAT_THRESHOLD = 3
-LOOP_REPEAT_WINDOW_SECONDS = 15.0
-
-
 def _fmt_ms(ms: float) -> str:
     total_seconds = int(ms // 1000)
     return f"{total_seconds // 60:02d}:{total_seconds % 60:02d}"
@@ -495,13 +485,15 @@ class MainWindow(QMainWindow):
         self._selected_file: str | None = None
         self._overlay: OverlayWindow | None = None
         self._transcript_history: list[TranscriptEvent] = []
-        # Feedback-loop auto-pause bookkeeping -- see _on_transcript. Keyed by
-        # is_translation so a repeating source line and a repeating
-        # translation line are tracked (and can each trigger) independently.
-        self._loop_repeat_state: dict[bool, tuple[str | None, int, float]] = {
-            True: (None, 0, 0.0),
-            False: (None, 0, 0.0),
-        }
+        # Collapses consecutive identical *finalized* log lines of the same
+        # kind (source vs. translation) into one "text xN" line instead of
+        # one line per repeat -- keyed by is_translation since source and
+        # translation repeats are independent and interleave in the default
+        # "both" log filter view. _log_repeat_block holds a reference to the
+        # QTextBlock currently showing that kind's last finalized line, so
+        # it can be re-edited directly even after other lines were appended.
+        self._log_repeat_state: dict[bool, tuple[str | None, int]] = {True: (None, 0), False: (None, 0)}
+        self._log_repeat_block: dict[bool, QTextBlock | None] = {True: None, False: None}
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -921,35 +913,6 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.set_gate_threshold(value / 100)
 
-    def _confirm_feedback_loop_risk(self) -> bool:
-        """A live mic can physically pick this app's own output back up
-        (e.g. it's routed to real speakers instead of a virtual cable) and
-        re-translate it endlessly -- confirmed live: the exact same sentence
-        repeating in the log over and over until Stop was clicked. Shared
-        between the Start button and the live "Tylko napisy" toggle (turning
-        audio back on mid-session carries the same risk). Returns True if
-        it's safe to proceed (not risky, or the user chose to continue
-        anyway), False if the user declined.
-        """
-        if self.subtitles_only_check.isChecked():
-            return True
-        output_name = self.output_combo.currentText()
-        if is_virtual_cable_name(output_name):
-            return True
-        answer = QMessageBox.warning(
-            self,
-            "Wybrane wyjście może spowodować pętlę sprzężenia",
-            f'Wybrane urządzenie wyjściowe ("{output_name}") nie wygląda na wirtualny '
-            "kabel audio (VB-Cable / BlackHole).\n\n"
-            "Jeśli mikrofon może usłyszeć ten dźwięk (np. przez głośniki), tłumaczenie "
-            "może wpaść w pętlę sprzężenia zwrotnego — to samo zdanie tłumaczone w kółko, "
-            "aż do ręcznego zatrzymania.\n\n"
-            "Kontynuować mimo to?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        return answer == QMessageBox.StandardButton.Yes
-
     def _on_start_stop(self) -> None:
         if self._worker is not None:
             self.start_stop_btn.setEnabled(False)
@@ -973,10 +936,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Brak urządzenia wyjściowego", "System nie zgłasza żadnego urządzenia audio wyjściowego.")
             return
 
-        # Loop-protection: see _confirm_feedback_loop_risk's docstring.
-        if not self._confirm_feedback_loop_risk():
-            return
-
         mic_device = self.mic_combo.currentData() if mic_active else None
         output_device = self.output_combo.currentData()
         source_lang = self.source_lang_combo.currentData()
@@ -996,7 +955,8 @@ class MainWindow(QMainWindow):
         # start a new one, and a fresh session's first event should always
         # start a new line even if the previous one ended on a partial.
         self._partial_line_active = False
-        self._loop_repeat_state = {True: (None, 0, 0.0), False: (None, 0, 0.0)}
+        self._log_repeat_state = {True: (None, 0), False: (None, 0)}
+        self._log_repeat_block = {True: None, False: None}
         worker = SessionWorker(SessionConfig(
             api_key=creds.api_key,
             source_lang=source_lang,
@@ -1039,16 +999,6 @@ class MainWindow(QMainWindow):
             self.file_pause_btn.setEnabled(False)
 
     def _on_subtitles_only_toggled(self, checked: bool) -> None:
-        # Turning audio back ON (unchecking) mid-session under risky
-        # conditions needs the same confirmation Start already requires --
-        # but only mid-session: before Start, _on_start_stop's own call to
-        # _confirm_feedback_loop_risk() already covers it, so warning here
-        # too (with no worker yet) would double up on the same check.
-        if self._worker is not None and not checked and not self._confirm_feedback_loop_risk():
-            self.subtitles_only_check.blockSignals(True)
-            self.subtitles_only_check.setChecked(True)
-            self.subtitles_only_check.blockSignals(False)
-            return
         if self._worker is not None:
             self._worker.set_subtitles_only(checked)
 
@@ -1135,12 +1085,45 @@ class MainWindow(QMainWindow):
         # accumulate an unbounded list.
         self._transcript_history.append(event)
         del self._transcript_history[:-300]
-        if event.is_final:
-            self._check_loop_repeat(event)
         if self._overlay is not None:
             self._overlay.on_transcript(event)  # overlay applies its own, independent filter
         if not self._event_passes_log_filter(event):
             return  # filtered out entirely -- doesn't touch the log or the partial-line bookkeeping
+        self._place_log_line(event)
+
+    def _place_log_line(self, event: TranscriptEvent) -> None:
+        """Appends/replaces the log's display for one already-filtered event,
+        collapsing a finalized line that repeats the immediately preceding
+        finalized line of the same kind (source vs. translation) into a
+        single "text xN" line instead of one line per repeat. Shared by
+        _on_transcript (live) and _rebuild_log (replay) so both stay in sync.
+        """
+        kind = event.is_translation
+        if event.is_final:
+            normalized = event.text.strip()
+            prev_text, prev_count = self._log_repeat_state[kind]
+            if normalized and normalized == prev_text and self._log_repeat_block[kind] is not None:
+                count = prev_count + 1
+                if self._partial_line_active:
+                    # This segment's own partial growth already created/grew
+                    # its own line as the widget's current last line -- it's
+                    # redundant now, delete it instead of leaving two lines.
+                    self._remove_last_log_block()
+                # Select exactly this block's own text, NOT via
+                # BlockUnderCursor -- on any block that isn't the document's
+                # last one, that selection also eats the trailing paragraph
+                # separator, so inserting plain text over it would silently
+                # merge this line with whatever line currently follows it.
+                # Explicit position math (block.length() includes that
+                # separator, so -1 excludes it) selects only the text.
+                block = self._log_repeat_block[kind]
+                cursor = QTextCursor(block)
+                cursor.setPosition(block.position())
+                cursor.setPosition(block.position() + block.length() - 1, QTextCursor.MoveMode.KeepAnchor)
+                cursor.insertText(self._format_log_line(event, suffix_count=count))
+                self._log_repeat_state[kind] = (normalized, count)
+                self._partial_line_active = False
+                return
         text = self._format_log_line(event)
         if self._partial_line_active:
             self._replace_last_log_line(text)
@@ -1149,53 +1132,18 @@ class MainWindow(QMainWindow):
         # A growing (non-final) line keeps getting replaced in place; once final,
         # the NEXT event (e.g. the translation) must start its own new line.
         self._partial_line_active = not event.is_final
+        if event.is_final:
+            normalized = event.text.strip()
+            self._log_repeat_state[kind] = (normalized, 1)
+            self._log_repeat_block[kind] = self.log.document().lastBlock()
 
-    def _check_loop_repeat(self, event: TranscriptEvent) -> None:
-        """Feedback-loop detection: the mic is always live now, so this
-        always runs (previously scoped to mic-only mode, which under-
-        protected mixed mic+file sessions -- a live mic can feed back on
-        itself regardless of whether a file is also playing). Confirmed
-        via a real incident where a live mic picked up this app's own
-        translated output through speakers and kept re-translating it,
-        producing the exact same final text over and over. Real speech
-        essentially never repeats a whole sentence verbatim LOOP_REPEAT_THRESHOLD
-        times in a row within LOOP_REPEAT_WINDOW_SECONDS of each other, so
-        that pattern is treated as a probable loop and auto-pauses the
-        session -- see _trigger_loop_auto_pause for why NOT auto-resuming
-        afterward is deliberate.
-        """
-        normalized = event.text.strip()
-        if not normalized:
-            return
-        prev_text, prev_count, prev_time = self._loop_repeat_state[event.is_translation]
-        if normalized == prev_text and (event.timestamp - prev_time) < LOOP_REPEAT_WINDOW_SECONDS:
-            count = prev_count + 1
-        else:
-            count = 1
-        self._loop_repeat_state[event.is_translation] = (normalized, count, event.timestamp)
-        if count >= LOOP_REPEAT_THRESHOLD:
-            # Reset immediately so this doesn't refire on every further repeat
-            # while the pause request is still in flight.
-            self._loop_repeat_state[event.is_translation] = (None, 0, event.timestamp)
-            self._trigger_loop_auto_pause(normalized)
-
-    def _trigger_loop_auto_pause(self, repeated_text: str) -> None:
-        self._partial_line_active = False
-        self.log.appendPlainText(
-            f"⚠ Wykryto prawdopodobną pętlę sprzężenia zwrotnego (to samo tłumaczenie "
-            f"powtórzone {LOOP_REPEAT_THRESHOLD}x z rzędu) — sesja wstrzymana automatycznie."
-        )
-        if self._worker is not None and not self._is_paused and not self._pause_request_pending:
-            self._pause_request_pending = True
-            self._worker.pause()
-        QMessageBox.warning(
-            self,
-            "Wykryto pętlę sprzężenia zwrotnego",
-            f'To samo tłumaczenie ("{repeated_text}") powtórzyło się {LOOP_REPEAT_THRESHOLD}x z rzędu — '
-            "sesja została automatycznie wstrzymana (Pauza), żeby nie generować dalszych kosztów.\n\n"
-            "Prawdopodobna przyczyna: mikrofon słyszy własne tłumaczenie z głośnika. Użyj słuchawek, "
-            "zmień urządzenie wyjściowe, albo ustaw Próg czułości mikrofonu, a potem kliknij Wznów.",
-        )
+    def _remove_last_log_block(self) -> None:
+        cursor = self.log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        cursor.removeSelectedText()
+        if not cursor.atStart():
+            cursor.deletePreviousChar()  # removes the now-dangling preceding newline
 
     def _event_passes_log_filter(self, event: TranscriptEvent) -> bool:
         filter_mode = self.log_filter_combo.currentData()
@@ -1205,9 +1153,11 @@ class MainWindow(QMainWindow):
             return False
         return True
 
-    def _format_log_line(self, event: TranscriptEvent) -> str:
+    def _format_log_line(self, event: TranscriptEvent, suffix_count: int = 1) -> str:
         kind = "→" if event.is_translation else "•"
         suffix = "" if event.is_final else " …"
+        if suffix_count >= 2:
+            suffix = f" x{suffix_count}"
         if self._show_lang_tags:
             return f"{kind} [{event.language}] {event.text}{suffix}"
         return f"{kind} {event.text}{suffix}"
@@ -1218,15 +1168,12 @@ class MainWindow(QMainWindow):
         # instead of only affecting transcripts that arrive afterward.
         self.log.clear()
         self._partial_line_active = False
+        self._log_repeat_state = {True: (None, 0), False: (None, 0)}
+        self._log_repeat_block = {True: None, False: None}
         for event in self._transcript_history:
             if not self._event_passes_log_filter(event):
                 continue
-            text = self._format_log_line(event)
-            if self._partial_line_active:
-                self._replace_last_log_line(text)
-            else:
-                self.log.appendPlainText(text)
-            self._partial_line_active = not event.is_final
+            self._place_log_line(event)
 
     def _on_show_tags_toggled(self, checked: bool) -> None:
         self._show_lang_tags = checked
@@ -1252,6 +1199,8 @@ class MainWindow(QMainWindow):
         self.log.clear()
         self._transcript_history = []
         self._partial_line_active = False
+        self._log_repeat_state = {True: (None, 0), False: (None, 0)}
+        self._log_repeat_block = {True: None, False: None}
         if self._overlay is not None:
             self._overlay.clear()
 
@@ -1264,6 +1213,8 @@ class MainWindow(QMainWindow):
     def _on_error(self, message: str) -> None:
         self._pause_request_pending = False  # a failed pause/resume/seek won't produce a state change
         self._partial_line_active = False  # don't let a later partial transcript overwrite this line
+        self._log_repeat_state = {True: (None, 0), False: (None, 0)}
+        self._log_repeat_block = {True: None, False: None}
         self.log.appendPlainText(message)
 
     def _on_toggle_overlay(self) -> None:

@@ -124,21 +124,6 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
    zawiera "CABLE" lub "BlackHole"; w przeciwnym razie wybierz je ręcznie z listy.)
 5. Miernik poziomu przy nowym źródle w OBS powinien reagować, gdy aplikacja tłumaczy mowę.
 
-**Ochrona przed pętlą sprzężenia zwrotnego** — mikrofon jest zawsze aktywny w trakcie sesji
-(niezależnie od tego, czy dodasz też plik), więc jeśli wybrane "Wyjście (do OBS)" nie wygląda na
-wirtualny kabel (np. to zwykłe głośniki), aplikacja przy Start pokazuje ostrzeżenie i pyta, czy
-kontynuować. Powód: jeśli mikrofon może usłyszeć to, co gra z wybranego wyjścia, tłumaczenie samo
-siebie usłyszy i zacznie tłumaczyć własny wynik w kółko — to samo zdanie powtarzające się bez
-końca w logu, aż do ręcznego Stop (zaobserwowane naprawdę: mikrofon złapał dźwięk z głośnika mimo
-sporej odległości).
-
-**Automatyczna Pauza przy wykrytej pętli** — dodatkowe zabezpieczenie działające już w trakcie
-sesji (nie tylko przy Start): jeśli to samo (finalne) tłumaczenie powtórzy się **3 razy z rzędu**
-w odstępach krótszych niż 15 sekund, aplikacja sama wciska Pauzę (zatrzymuje też naliczanie u
-Palabry) i pokazuje okno z wyjaśnieniem. Celowo **nie wznawia się sama** — wymaga ręcznego
-kliknięcia Wznów po naprawieniu przyczyny (słuchawki, inne wyjście, Próg czułości mikrofonu), żeby
-nie wpaść w cykl auto-pauza/auto-start odtwarzający wciąż tę samą pętlę.
-
 ## Użycie
 
 1. Wybierz mikrofon z listy — jest zawsze aktywny w trakcie sesji, niezależnie od tego, czy
@@ -167,12 +152,9 @@ nie wpaść w cykl auto-pauza/auto-start odtwarzający wciąż tę samą pętlę
    odtwarzane na wybrane urządzenie, zostaje tylko tekst (log/okienko z napisami). Palabra nie
    oferuje trybu bez syntezy mowy, więc koszt sesji się nie zmienia — to tylko wycisza
    odtwarzanie po stronie aplikacji, przydatne gdy zależy Ci wyłącznie na napisach do OBS.
-   Przy włączonym trybie ostrzeżenie o pętli sprzężenia zwrotnego (patrz niżej) się nie
-   pojawia — skoro żaden dźwięk nie jest odtwarzany, mikrofon nie ma czego złapać.
    **Można to przełączać także w trakcie trwającej sesji**, nie tylko przed Start — zaznaczenie
    natychmiast wycisza dźwięk (łącznie z tym, co akurat czeka w kolejce odtwarzania), a
-   odznaczenie w trakcie sesji, przy aktywnym mikrofonie i wyjściu niewyglądającym na wirtualny
-   kabel, pokazuje to samo ostrzeżenie o pętli sprzężenia co przy Start.
+   odznaczenie natychmiast je z powrotem włącza.
 4. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie. Jeśli
    masz wybrany plik, nie zaczyna się on odtwarzać automatycznie — patrz niżej.
 5. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
@@ -202,7 +184,11 @@ nie wpaść w cykl auto-pauza/auto-start odtwarzający wciąż tę samą pętlę
   zmiana źródła audio (serwer Palabra nie wie, że plik się zmienił) — bez ryzyka błędów API.
 - **Suwak pozycji** — pokazuje aktualny czas odtwarzania pliku; przeciągnięcie i puszczenie
   przewija plik do wskazanego momentu (pomijając to, co było przed/po). Dotyczy wyłącznie
-  ścieżki pliku, mikrofon nie jest tym przewijaniem w żaden sposób dotknięty.
+  ścieżki pliku, mikrofon nie jest tym przewijaniem w żaden sposób dotknięty. Dekodowanie
+  pliku zaczyna się natychmiast po jego wybraniu/dodaniu (w tle, niezależnie od stanu pauzy
+  i od tego, czy sesja zdążyła się już połączyć z serwerem) — dzięki temu suwak staje się
+  aktywny, a "Wznów plik" realnie odtwarza dźwięk, zauważalnie szybciej niż gdyby dekodowanie
+  czekało na oba te kroki.
 - **Gdy plik się skończy, sesja leci dalej na samym mikrofonie** — nie zatrzymuje się
   automatycznie; trzeba kliknąć Stop ręcznie.
 
@@ -222,8 +208,8 @@ nie wpaść w cykl auto-pauza/auto-start odtwarzający wciąż tę samą pętlę
   (bliższa mowa) przechodzi bez zmian. **Uwaga na kierunek** — im wyżej ustawisz suwak, tym
   WIĘCEJ dźwięku jest odcinane (nie odwrotnie); zbyt wysoka wartość odetnie też Twoją własną,
   cichszą mowę. Pomaga odciąć ciche, odległe dźwięki — w tym własne tłumaczenie dobiegające
-  z głośnika, patrz ochrona przed pętlą sprzężenia zwrotnego wyżej — zacznij od niskiej
-  wartości (15–20%) i zwiększaj tylko w razie potrzeby.
+  z głośnika, jeśli mikrofon może je usłyszeć — zacznij od niskiej wartości (15–20%) i
+  zwiększaj tylko w razie potrzeby.
 
 **Odśwież urządzenia** — przycisk obok wyboru mikrofonu ponownie skanuje sprzęt audio, więc
 mikrofon podłączony *po* uruchomieniu aplikacji też się pojawi na liście (bez restartu apki).
@@ -235,6 +221,11 @@ WASAPI, WDM-KS), więc aplikacja pokazuje tylko wersję WASAPI każdego urządze
 
 ### Log w głównym oknie
 
+- **Powtarzające się linie zwijają się automatycznie** — gdy to samo (finalne) zdanie/słowo
+  pojawi się kilka razy pod rząd (np. "Alleluja" powtórzone 5 razy), log pokazuje jedną linię
+  z licznikiem ("Alleluja x5") zamiast pięciu identycznych linii. Dotyczy zarówno głównego
+  logu, jak i odczepianego okienka z napisami — każde ma własny licznik. Źródło i tłumaczenie
+  liczone są niezależnie.
 - **Pokaż w logu** — filtr (źródłowy i tłumaczenie / tylko źródłowy / tylko tłumaczenie)
   działa "na żywo": zmiana filtra od razu przefiltrowuje już wyświetlony log, a nie tylko
   kolejne wypowiedzi.

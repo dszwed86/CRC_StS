@@ -380,6 +380,32 @@ class FileStream:
         self._seek_to_ms: float | None = None
         self.position_ms: float = 0.0
         self.total_ms: float = 0.0
+        # Decode starts immediately at construction time instead of waiting
+        # for chunks() to be iterated -- which today only happens once the
+        # Palabra server connection completes -- so total_ms/seek() and the
+        # GUI's position slider become usable as soon as possible, regardless
+        # of server-connect latency or whether the file is still paused (a
+        # file starts paused by design, see SessionWorker.start()/
+        # TranslationRunner._do_set_file, but should still decode while
+        # paused). A plain thread, not asyncio: this runs off the event loop
+        # entirely so it can't be starved by loop scheduling, and both
+        # FileStream() call sites already have a loop running by construction
+        # time anyway -- the point is decoupling decode from chunks() being
+        # pumped, not from asyncio itself.
+        self._decode_done = threading.Event()
+        self._pcm: bytes | None = None
+        self._decode_error: Exception | None = None
+        threading.Thread(target=self._decode, daemon=True).start()
+
+    def _decode(self) -> None:
+        try:
+            pcm = load_pcm(self._path, sample_rate=RATE, channels=CHANNELS)
+            self._pcm = pcm
+            self.total_ms = len(pcm) / BYTES_PER_MS
+        except Exception as e:  # decode failure (corrupt file, codec issue, ...) -- surfaced later by chunks()
+            self._decode_error = e
+        finally:
+            self._decode_done.set()
 
     def __enter__(self) -> "FileStream":
         return self
@@ -397,8 +423,10 @@ class FileStream:
         self._seek_to_ms = max(0.0, min(position_ms, self.total_ms))
 
     async def chunks(self) -> AsyncIterator[bytes]:
-        pcm = await asyncio.to_thread(load_pcm, self._path, sample_rate=RATE, channels=CHANNELS)
-        self.total_ms = len(pcm) / BYTES_PER_MS
+        await asyncio.to_thread(self._decode_done.wait)
+        if self._decode_error is not None:
+            raise self._decode_error
+        pcm = self._pcm
         # Real recordings usually trail off into silence, which is what lets the
         # server detect the end of the last phrase and finalize/translate it
         # within eos_timeout. A file that cuts off cold (e.g. synthesized audio,
