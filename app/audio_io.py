@@ -204,6 +204,15 @@ class MicStream:
         self._paused = threading.Event()
         self._gain = 1.0
         self._gate_threshold = 0.0
+        # Live input level (0.0-1.0, peak amplitude), for a GUI meter that
+        # confirms the mic is actually picking up sound. Computed from the
+        # RAW incoming samples -- before gain/gate are applied -- so it
+        # answers "is audio reaching the app at all", not "what's actually
+        # being sent". Updated on the audio callback's own thread; a plain
+        # float write/read is safe enough here (single writer, no torn
+        # reads under the GIL), same reasoning as total_ms/position_ms
+        # elsewhere in this file.
+        self.level: float = 0.0
         self._stream = self._open_stream(device)
 
     def _open_stream(self, device: int | None) -> sd.RawInputStream:
@@ -217,8 +226,13 @@ class MicStream:
         )
 
     def _on_audio(self, indata, frames, time_info, status) -> None:
+        data = bytes(indata)
+        if data:
+            self.level = min(1.0, int(np.abs(np.frombuffer(data, dtype=np.int16)).max()) / 32767)
+        else:
+            self.level = 0.0
         try:
-            self._q.put_nowait(bytes(indata))
+            self._q.put_nowait(data)
         except queue.Full:
             pass  # drop audio rather than block the audio-driver thread
 
@@ -553,6 +567,10 @@ class MixedSource:
 
     def switch_device(self, new_device: int | None) -> None:
         self._mic.switch_device(new_device)
+
+    @property
+    def mic_level(self) -> float:
+        return self._mic.level
 
     @property
     def position_ms(self) -> float:

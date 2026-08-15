@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -321,6 +322,10 @@ class SessionWorker(QObject):
     def total_ms(self) -> float:
         return self._mixed_source.total_ms if self._mixed_source else 0.0
 
+    @property
+    def mic_level(self) -> float:
+        return self._mixed_source.mic_level if self._mixed_source else 0.0
+
     def start(self) -> None:
         # WASAPI (the audio backend selected for every device on Windows --
         # see audio_io._preferred_hostapi_index) is COM-based and requires
@@ -529,6 +534,21 @@ class MainWindow(QMainWindow):
         gain_row.addWidget(self.mic_gain_label)
         mic_gain_outer.addLayout(gain_row)
 
+        level_row = QHBoxLayout()
+        level_row.addWidget(QLabel("Poziom sygnału:"))
+        self.mic_level_bar = QProgressBar()
+        self.mic_level_bar.setRange(0, 100)
+        self.mic_level_bar.setValue(0)
+        self.mic_level_bar.setTextVisible(False)
+        self.mic_level_bar.setFixedHeight(10)
+        self.mic_level_bar.setToolTip(
+            "Poziom dźwięku odbieranego z mikrofonu na żywo, w trakcie trwającej sesji -- "
+            "potwierdza, że mikrofon faktycznie łapie dźwięk, niezależnie od Głośności mikrofonu."
+        )
+        self.mic_level_bar.setStyleSheet("QProgressBar::chunk { background-color: #4caf50; }")
+        level_row.addWidget(self.mic_level_bar, stretch=1)
+        mic_gain_outer.addLayout(level_row)
+
         gate_row = QHBoxLayout()
         gate_label_text = QLabel("Ignoruj ciszej niż:")
         gate_tooltip = (
@@ -568,6 +588,26 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.file_btn)
         file_layout.addWidget(self.file_clear_btn)
 
+        self.file_playback_row = QWidget()
+        file_playback_layout = QHBoxLayout(self.file_playback_row)
+        file_playback_layout.setContentsMargins(0, 0, 0, 0)
+        self.file_pause_btn = QPushButton("Pauza pliku")
+        self.file_pause_btn.setToolTip("Wstrzymuje/wznawia tylko plik -- mikrofon i reszta sesji nie są tym dotknięte.")
+        self.file_pause_btn.setVisible(False)
+        self.file_pause_btn.setEnabled(False)
+        self.file_pause_btn.clicked.connect(self._on_file_pause_resume)
+        self.position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setEnabled(False)
+        self.position_slider.sliderReleased.connect(self._on_seek)
+        self.position_label = QLabel("00:00 / 00:00")
+        file_playback_layout.addWidget(self.file_pause_btn)
+        file_playback_layout.addWidget(self.position_slider, stretch=1)
+        file_playback_layout.addWidget(self.position_label)
+        # Same visibility lifecycle as position_slider/position_label below --
+        # no file selected yet at construction time.
+        self.position_slider.setVisible(False)
+        self.position_label.setVisible(False)
+
         # mic and file are both always part of every session now -- there is
         # no mode selector, so both rows are always visible; no toggling code
         # needed at all (contrast with the old _on_mode_changed).
@@ -579,6 +619,7 @@ class MainWindow(QMainWindow):
         form.addRow("Mikrofon:", mic_row)
         form.addRow("", self.mic_gain_row)
         form.addRow("Plik (opcjonalnie):", self.file_row)
+        form.addRow("", self.file_playback_row)
 
         self.output_combo = QComboBox()
         self._output_devices = list_output_devices()
@@ -635,36 +676,21 @@ class MainWindow(QMainWindow):
         root.addLayout(form)
         root.addWidget(self.output_hint)
 
-        self.playback_row = QWidget()
-        playback_layout = QHBoxLayout(self.playback_row)
-        playback_layout.setContentsMargins(0, 0, 0, 0)
         self.pause_btn = QPushButton("Pauza")
         self.pause_btn.setToolTip("Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku.")
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._on_pause_resume)
-        self.file_pause_btn = QPushButton("Pauza pliku")
-        self.file_pause_btn.setToolTip("Wstrzymuje/wznawia tylko plik -- mikrofon i reszta sesji nie są tym dotknięte.")
-        self.file_pause_btn.setVisible(False)
-        self.file_pause_btn.setEnabled(False)
-        self.file_pause_btn.clicked.connect(self._on_file_pause_resume)
-        self.position_slider = QSlider(Qt.Orientation.Horizontal)
-        self.position_slider.setEnabled(False)
-        self.position_slider.sliderReleased.connect(self._on_seek)
-        self.position_label = QLabel("00:00 / 00:00")
-        playback_layout.addWidget(self.pause_btn)
-        playback_layout.addWidget(self.file_pause_btn)
-        playback_layout.addWidget(self.position_slider, stretch=1)
-        playback_layout.addWidget(self.position_label)
-        root.addWidget(self.playback_row)
-        # position_slider/position_label start hidden -- no file is selected
-        # yet at construction time; _choose_file()/_on_clear_file() toggle
-        # them from here on (see Task 6).
-        self.position_slider.setVisible(False)
-        self.position_label.setVisible(False)
 
         self._position_timer = QTimer(self)
         self._position_timer.setInterval(250)
         self._position_timer.timeout.connect(self._update_position)
+
+        # Faster than _position_timer: a level meter reads choppy/laggy at
+        # 250ms, needs a shorter interval to look live.
+        self._level_timer = QTimer(self)
+        self._level_timer.setInterval(80)
+        self._level_timer.timeout.connect(self._update_level_meter)
+
         self._is_paused = False
         self._file_paused = False
         self._pause_request_pending = False
@@ -676,6 +702,7 @@ class MainWindow(QMainWindow):
         self.start_stop_btn = QPushButton("Start")
         self.start_stop_btn.clicked.connect(self._on_start_stop)
         control_row.addWidget(self.status_label, stretch=1)
+        control_row.addWidget(self.pause_btn)
         control_row.addWidget(self.start_stop_btn)
         root.addLayout(control_row)
 
@@ -989,6 +1016,7 @@ class MainWindow(QMainWindow):
         thread.start()
         self.start_stop_btn.setText("Stop")
         self._set_config_enabled(False)
+        self._level_timer.start()
         if self._selected_file is not None:
             self._file_paused = True
             self.file_pause_btn.setText("Wznów plik")
@@ -1025,6 +1053,8 @@ class MainWindow(QMainWindow):
         self.start_stop_btn.setEnabled(True)
         self._set_config_enabled(True)
         self._position_timer.stop()
+        self._level_timer.stop()
+        self.mic_level_bar.setValue(0)
         self._is_paused = False
         self.pause_btn.setText("Pauza")
         self.pause_btn.setEnabled(False)
@@ -1076,6 +1106,13 @@ class MainWindow(QMainWindow):
         if not self.position_slider.isSliderDown():
             self.position_slider.setValue(int(self._worker.position_ms))
         self.position_label.setText(f"{_fmt_ms(self._worker.position_ms)} / {_fmt_ms(total)}")
+
+    def _update_level_meter(self) -> None:
+        if self._worker is None:
+            self._level_timer.stop()
+            self.mic_level_bar.setValue(0)
+            return
+        self.mic_level_bar.setValue(int(self._worker.mic_level * 100))
 
     def _on_transcript(self, event: TranscriptEvent) -> None:
         # Kept so a newly-opened overlay can be backfilled (see _open_overlay)

@@ -202,6 +202,10 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
 - **Głośność mikrofonu** — suwak 0–100%. Przy 0% mikrofon jest wyciszony (wysyła ciszę),
   ale sesja i tak trwa dalej (naliczanie po stronie Palabry nie jest wstrzymane — do tego
   służy Pauza). Przydatne do szybkiego, chwilowego wyciszenia bez przerywania sesji.
+- **Poziom sygnału** — pasek pod suwakiem Głośności, aktywny tylko w trakcie trwającej sesji,
+  pokazuje na żywo, że mikrofon faktycznie odbiera dźwięk. Pokazuje surowy poziom wejściowy
+  (sprzed Głośności/Ignoruj ciszej niż), więc reaguje niezależnie od tych ustawień — przydatne
+  do szybkiego sprawdzenia, czy wybrane urządzenie w ogóle coś łapie.
 - **Ignoruj ciszej niż** — suwak 0–100%, domyślnie wyłączony (0%). Inaczej niż głośność (która
   ścisza wszystko po równo, także Twój głos), to prawdziwy próg: dźwięk cichszy niż ustawiony
   poziom jest całkowicie wycinany (zamieniany na ciszę) *zanim* zostanie wysłany, a głośniejszy
