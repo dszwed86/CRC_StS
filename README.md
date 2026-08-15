@@ -328,10 +328,11 @@ Jeśli połączenie WebSocket z Palabrą padnie w trakcie sesji (np. krótka prz
 pokazuje wtedy "Rozłączono, ponawiam próbę...". Mikrofon i plik działają cały czas normalnie
 w tle — to, co zostało powiedziane w trakcie samej przerwy, nie zostanie przetłumaczone (nie ma
 buforowania na zapas), ale po udanym ponownym połączeniu tłumaczenie od razu wraca do bieżącego
-momentu, zamiast doganiać zaległość. Każda udana, w pełni działająca sesja odnawia pulę 3 prób
-od nowa, więc pojedyncza wcześniejsza przerwa nie "zużywa" prób na później. Jeśli wszystkie
-próby zawiodą (albo błąd nie nadaje się do ponawiania, np. zły klucz API), sesja kończy się
-zwykłym Błędem jak dotychczas — trzeba kliknąć Start ręcznie.
+momentu, zamiast doganiać zaległość. Połączenie, które utrzyma się przynajmniej 10 sekund, zanim
+znowu padnie, odnawia pulę 3 prób od nowa — ale kilka prób z rzędu, gdzie serwer wpuszcza i od
+razu znów rozłącza, **nie** resetują puli w kółko, więc apka faktycznie się kiedyś podda zamiast
+próbować bez końca. Jeśli wszystkie próby zawiodą (albo błąd nie nadaje się do ponawiania, np.
+zły klucz API), sesja kończy się zwykłym Błędem jak dotychczas — trzeba kliknąć Start ręcznie.
 
 ## Szybkość tłumaczenia
 

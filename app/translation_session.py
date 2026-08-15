@@ -30,6 +30,12 @@ from .audio_io import FileStream
 # behavior for those.
 RECONNECT_MAX_ATTEMPTS = 3
 RECONNECT_BACKOFF_SECONDS = (2.0, 5.0, 10.0)
+# A connection must stay up this long before a later drop resets the retry
+# budget -- otherwise a server that accepts the connection but drops it
+# again almost immediately (flapping) would reset the counter on every
+# single attempt and never actually exhaust it, defeating the whole point
+# of a bounded retry budget.
+RECONNECT_STABLE_SECONDS = 10.0
 
 
 class AudioSource(Protocol):
@@ -268,7 +274,7 @@ class TranslationRunner:
 
     async def run(self) -> None:
         """Runs the session, auto-reconnecting up to RECONNECT_MAX_ATTEMPTS
-        times (with growing backoff) on a dropped WebSocket/session -- see
+        times (with growing backoff) on a dropped connection -- see
         RECONNECT_MAX_ATTEMPTS's comment for exactly which failures qualify.
         Audio spoken during a reconnect gap is NOT buffered/replayed: the
         source (mic/file) keeps advancing in real time regardless, so
@@ -277,10 +283,27 @@ class TranslationRunner:
         replayed backlog triggering the server's "arriving faster than
         real-time" warning (the same failure mode already hit once trying
         to change voice mid-stream).
+
+        IMPORTANT, found by reading palabra_ai's own source (client.py):
+        TranslationSession._receive_loop() catches websockets.ConnectionClosed
+        and silently swallows it (does NOT set _recv_error) before putting an
+        end-of-stream sentinel -- so `async for event in session:` ending on
+        its own raises NOTHING, not even SessionError, whether the server
+        closed cleanly OR the connection just dropped out from under us.
+        Those two cases are indistinguishable from any exception we could
+        catch. The only reliable signal this app has to tell them apart is
+        self._stop: MixedSource is an infinite source (mic never runs dry),
+        so feed() only ever calls session.end() because self._stop was set --
+        there is no other legitimate "natural end" for this app. So: if the
+        receive loop ends quietly and self._stop is NOT set, treat it exactly
+        like a dropped connection and reconnect.
         """
         attempt = 0
         while True:
             self._on_state(SessionState.RECONNECTING if attempt > 0 else SessionState.CONNECTING)
+            connection_dropped = False
+            drop_message = ""
+            connected_at: float | None = None
             try:
                 async with self._palabra.translation(
                     source=self._source_lang,
@@ -299,7 +322,7 @@ class TranslationRunner:
                 ) as session:
                     self._session = session
                     self._on_state(SessionState.RUNNING)
-                    attempt = 0  # a session that actually connected earns a fresh retry budget
+                    connected_at = time.monotonic()
 
                     async def feed() -> None:
                         async for chunk in self._source.chunks():
@@ -346,25 +369,18 @@ class TranslationRunner:
                         feeder.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
                             await feeder
-                self._on_state(SessionState.STOPPED)
-                return
-            except (SessionError, NotReadyError) as e:
-                if self._stop.is_set() or attempt >= RECONNECT_MAX_ATTEMPTS:
-                    self._on_error(f"Błąd: {e}")
-                    self._on_state(SessionState.ERROR)
+                # Reached only when the block above exits WITHOUT an
+                # exception -- see this method's docstring: that alone
+                # doesn't tell us whether this was a clean, requested end
+                # or the connection dropping silently underneath us.
+                if self._stop.is_set():
+                    self._on_state(SessionState.STOPPED)
                     return
-                backoff = RECONNECT_BACKOFF_SECONDS[min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)]
-                attempt += 1
-                self._on_error(
-                    f"Połączenie przerwane ({e}) -- ponawiam próbę {attempt}/{RECONNECT_MAX_ATTEMPTS} za {backoff:.0f}s..."
-                )
-                elapsed = 0.0
-                while elapsed < backoff:
-                    if self._stop.is_set():
-                        self._on_state(SessionState.STOPPED)
-                        return
-                    await asyncio.sleep(0.2)
-                    elapsed += 0.2
+                connection_dropped = True
+                drop_message = "połączenie zostało zerwane"
+            except (SessionError, NotReadyError) as e:
+                connection_dropped = True
+                drop_message = str(e)
             except PalabraError as e:
                 self._on_error(f"Błąd: {e}")
                 self._on_state(SessionState.ERROR)
@@ -375,3 +391,27 @@ class TranslationRunner:
                 return
             finally:
                 self._session = None
+
+            assert connection_dropped  # every path above either returned or set this
+            if connected_at is not None and time.monotonic() - connected_at >= RECONNECT_STABLE_SECONDS:
+                # This connection held up for a real while before dropping
+                # again -- treat it as a fresh, independent outage rather
+                # than continuing to spend the same budget a much earlier
+                # (possibly unrelated) blip already started using up.
+                attempt = 0
+            if self._stop.is_set() or attempt >= RECONNECT_MAX_ATTEMPTS:
+                self._on_error(f"Błąd: {drop_message}")
+                self._on_state(SessionState.ERROR)
+                return
+            backoff = RECONNECT_BACKOFF_SECONDS[min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)]
+            attempt += 1
+            self._on_error(
+                f"Połączenie przerwane ({drop_message}) -- ponawiam próbę {attempt}/{RECONNECT_MAX_ATTEMPTS} za {backoff:.0f}s..."
+            )
+            elapsed = 0.0
+            while elapsed < backoff:
+                if self._stop.is_set():
+                    self._on_state(SessionState.STOPPED)
+                    return
+                await asyncio.sleep(0.2)
+                elapsed += 0.2
