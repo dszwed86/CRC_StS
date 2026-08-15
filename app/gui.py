@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -511,7 +512,8 @@ class MainWindow(QMainWindow):
         settings_row.addWidget(self.settings_btn)
         root.addLayout(settings_row)
 
-        form = QFormLayout()
+        source_group = QGroupBox("Źródło dźwięku")
+        form = QFormLayout(source_group)
 
         self.mic_combo = QComboBox()
         self._input_devices = list_input_devices()
@@ -621,6 +623,9 @@ class MainWindow(QMainWindow):
         form.addRow("Plik (opcjonalnie):", self.file_row)
         form.addRow("", self.file_playback_row)
 
+        output_group = QGroupBox("Tłumaczenie")
+        form = QFormLayout(output_group)
+
         self.output_combo = QComboBox()
         self._output_devices = list_output_devices()
         cable = find_virtual_cable(self._output_devices)
@@ -673,7 +678,8 @@ class MainWindow(QMainWindow):
         voice_row.addWidget(self.manage_voices_btn)
         form.addRow("Głos:", voice_row)
 
-        root.addLayout(form)
+        root.addWidget(source_group)
+        root.addWidget(output_group)
         root.addWidget(self.output_hint)
 
         self.pause_btn = QPushButton("Pauza")
