@@ -405,6 +405,14 @@ class TranslationRunner:
                 return
             backoff = RECONNECT_BACKOFF_SECONDS[min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)]
             attempt += 1
+            # Fire RECONNECTING now, not just at the top of the next loop
+            # iteration (which only happens AFTER this backoff wait) --
+            # otherwise the GUI status label stays stuck on "Tłumaczę na
+            # żywo" for the whole 2-10s wait, and _on_state's own billable-
+            # time fold (see gui.py's _on_state) never runs until then
+            # either, so cost/duration would keep accumulating through a
+            # window Palabra isn't actually billing for.
+            self._on_state(SessionState.RECONNECTING)
             self._on_error(
                 f"Połączenie przerwane ({drop_message}) -- ponawiam próbę {attempt}/{RECONNECT_MAX_ATTEMPTS} za {backoff:.0f}s..."
             )

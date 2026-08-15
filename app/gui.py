@@ -572,6 +572,10 @@ _STATE_LABELS = {
 PALABRA_COST_PER_MINUTE_USD = 0.04
 
 
+def _estimated_cost(seconds: float) -> float:
+    return (seconds / 60) * PALABRA_COST_PER_MINUTE_USD
+
+
 def _fmt_ms(ms: float) -> str:
     total_seconds = int(ms // 1000)
     return f"{total_seconds // 60:02d}:{total_seconds % 60:02d}"
@@ -1377,7 +1381,7 @@ class MainWindow(QMainWindow):
         # total here -- nothing still "in flight" left to add.
         final_seconds = self._session_billable_seconds
         if final_seconds > 0 and self._session_started_at is not None:
-            final_cost = (final_seconds / 60) * PALABRA_COST_PER_MINUTE_USD
+            final_cost = _estimated_cost(final_seconds)
             config.append_session_history(self._session_started_at, final_seconds, final_cost)
             if self._balance_usd is not None:
                 self._balance_usd -= final_cost
@@ -1467,7 +1471,7 @@ class MainWindow(QMainWindow):
         if self._session_running_since is not None:
             total_seconds += time.monotonic() - self._session_running_since
         minutes, seconds = divmod(int(total_seconds), 60)
-        cost = (total_seconds / 60) * PALABRA_COST_PER_MINUTE_USD
+        cost = _estimated_cost(total_seconds)
         text = f"{minutes:02d}:{seconds:02d} (~${cost:.2f})"
         if self._balance_usd is not None:
             text += f" | saldo ~${self._balance_usd - cost:.2f}"
