@@ -459,7 +459,17 @@ class FileStream:
         # or a hard trim) doesn't -- so append silence to guarantee that gap.
         # position_ms/seek() are unaffected: both stay clamped to total_ms.
         pcm += bytes(int(BYTES_PER_MS * TRAILING_SILENCE_MS))
-        pos = 0
+        # Resume from wherever a PRIOR chunks() call left off, not always 0:
+        # this method gets called fresh again -- restarting its local `pos`
+        # from scratch -- every time TranslationRunner.run() reconnects
+        # (feed() is a brand-new closure each reconnect, so is this
+        # generator). self.position_ms is the one piece of state that
+        # survives across those separate calls; without seeding `pos` from
+        # it, a mixed-in file would silently rewind to the very beginning
+        # and replay from scratch after any mid-session reconnect.
+        pos = int(self.position_ms * BYTES_PER_MS)
+        pos -= pos % 2  # keep 16-bit sample alignment
+        pos = max(0, min(pos, len(pcm)))
         pacer = RealtimePacer(CHUNK_MS)
         while True:
             if self._seek_to_ms is not None:

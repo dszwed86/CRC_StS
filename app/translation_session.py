@@ -109,6 +109,10 @@ class TranslationRunner:
         # thread at any time, including before run()'s event loop even starts.
         self._stop = stop_event if stop_event is not None else threading.Event()
         self._session = None  # set once the session is entered; used by pause/resume/seek
+        # Tracks the user's own pause intent, independent of self._session
+        # (which is torn down and recreated on every reconnect) -- see
+        # run()'s use of this right after a reconnect completes.
+        self._paused_by_user = False
 
     def stop(self) -> None:
         """Requests a graceful stop: feeding ends, session.end() flushes the translation tail."""
@@ -139,6 +143,7 @@ class TranslationRunner:
         try:
             self._source.pause()
             await self._session.pause()
+            self._paused_by_user = True
             self._on_state(SessionState.PAUSED)
         except PalabraError as e:
             self._on_error(f"Błąd: {e}")
@@ -156,6 +161,7 @@ class TranslationRunner:
             await self._session.resume()
             if hasattr(self._source, "resume"):
                 self._source.resume()
+            self._paused_by_user = False
             self._on_state(SessionState.RUNNING)
         except PalabraError as e:
             self._on_error(f"Błąd: {e}")
@@ -321,8 +327,23 @@ class TranslationRunner:
                     silence_threshold=0.5,
                 ) as session:
                     self._session = session
-                    self._on_state(SessionState.RUNNING)
                     connected_at = time.monotonic()
+                    if self._paused_by_user:
+                        # A reconnect landed while the user had this session
+                        # paused (see request_pause()/_do_pause()): the
+                        # source itself is still correctly blocked (its own
+                        # pause flag survives across reconnects, since
+                        # self._source is never recreated), but the freshly
+                        # (re)connected session doesn't know about that on
+                        # its own -- without this, the code below would
+                        # unconditionally report RUNNING, resetting the
+                        # GUI's Pauza button to "unpaused" while the source
+                        # stays silently, permanently stuck not feeding any
+                        # audio, with no way left to un-stick it.
+                        await session.pause()
+                        self._on_state(SessionState.PAUSED)
+                    else:
+                        self._on_state(SessionState.RUNNING)
 
                     async def feed() -> None:
                         async for chunk in self._source.chunks():
