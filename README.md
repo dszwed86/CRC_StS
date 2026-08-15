@@ -59,6 +59,11 @@ Najprościej: pobierz gotową aplikację ze strony wydań —
 Każda kolejna sesja to już tylko podwójne kliknięcie w pobrany plik — nic się nie instaluje
 ani nie pobiera przy starcie.
 
+**Sprawdzanie aktualizacji** — aplikacja przy każdym starcie w tle, jednorazowo, sprawdza
+najnowsze wydanie na GitHubie. Jeśli jest nowsza wersja, w lewym górnym rogu pojawia się
+klikalny link do niej. Brak internetu albo niedostępny GitHub nie przeszkadza w normalnym
+uruchomieniu — sprawdzenie po prostu się nie udaje po cichu, bez żadnego komunikatu błędu.
+
 <details>
 <summary>Budowanie ze źródeł / dla programistów</summary>
 
@@ -139,7 +144,14 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
    wykrywany od razu przy wyborze (czytelny komunikat), zamiast dopiero przy kliknięciu Start.
    Przycisk **✕** obok usuwa wybrany plik. Oba działania — wybór i usunięcie pliku — działają
    też **w trakcie trwającej sesji**, nie tylko przed Start; zobacz szczegóły niżej.
-3. Ustaw język źródłowy i docelowy (domyślnie polski → angielski) oraz opcjonalnie **Głos**:
+3. Wybierz **Wyjście (do OBS)** — wirtualny kabel podpięty pod OBS (patrz sekcja Konfiguracja
+   OBS wyżej). Przycisk **"Testuj wyjście"** obok odtwarza krótki dźwięk testowy na wybrane
+   urządzenie, bez uruchamiania żadnej sesji Palabra (czyli bez kosztu) — pozwala od razu
+   sprawdzić, czy OBS faktycznie odbiera dźwięk z tego urządzenia, zanim zaczniesz płatną
+   sesję. W trakcie trwającej sesji pasek **Poziom wyjścia** (obok pola Wyjście) pokazuje na
+   żywo, że przetłumaczony dźwięk faktycznie dociera do wybranego urządzenia — nie tylko że
+   został odebrany od serwera.
+4. Ustaw język źródłowy i docelowy (domyślnie polski → angielski) oraz opcjonalnie **Głos**:
    - **Domyślny (auto)** — serwer sam dobiera głos.
    - **default_low** / **default_high** — wbudowane głosy ogólne (niższy/wyższy).
    - **Klonowanie głosu mówcy (eksperymentalne)** — tłumaczenie brzmi głosem osoby mówiącej
@@ -161,10 +173,19 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
    **Można to przełączać także w trakcie trwającej sesji**, nie tylko przed Start — zaznaczenie
    natychmiast wycisza dźwięk (łącznie z tym, co akurat czeka w kolejce odtwarzania), a
    odznaczenie natychmiast je z powrotem włącza.
-4. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie. Jeśli
+5. Kliknij **Start**. W dolnym panelu pojawia się na żywo transkrypcja i tłumaczenie. Jeśli
    masz wybrany plik, nie zaczyna się on odtwarzać automatycznie — patrz niżej.
-5. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
+6. **Stop** kończy sesję łagodnie — dokańcza tłumaczenie ostatniej wypowiedzianej frazy
    przed zamknięciem połączenia.
+
+**Skróty klawiszowe** — **F5** to to samo co kliknięcie Start/Stop, **F6** to samo co Pauza.
+Działają niezależnie od tego, który element interfejsu jest aktualnie aktywny.
+
+**Czas trwania i orientacyjny koszt sesji** — licznik obok statusu pokazuje czas, przez który
+sesja faktycznie nalicza u Palabry (czyli bez czasu spędzonego w Pauzie), oraz przybliżony
+koszt wg stawki $0.04/min z dokumentacji Palabra. To wyliczenie po stronie aplikacji, nie
+prawdziwe saldo — Palabra nie udostępnia salda przez API (patrz **Otwórz panel Palabra**
+w Ustawieniach, żeby zobaczyć rzeczywiste zużycie).
 
 **Dwa niezależne przyciski pauzy:**
 
@@ -249,6 +270,7 @@ WASAPI, WDM-KS), więc aplikacja pokazuje tylko wersję WASAPI każdego urządze
 - **Błędy zapisują się też do pliku** `~/.sts_bridge/errors.log` (z znacznikiem czasu), oprócz
   pokazania się w logu głównego okna — nigdy w okienku z napisami. Przydatne, żeby odtworzyć
   błąd sprzed zamknięcia aplikacji albo taki, który wyszedł z widocznego zakresu logu.
+  Przycisk **"Otwórz log błędów"** otwiera ten plik od razu w domyślnym edytorze tekstu.
 
 ### Odczepiane okienko z tłumaczeniem (do OBS)
 
@@ -319,4 +341,3 @@ dla pamięci komputera.
 - Tłumaczenie na wiele języków jednocześnie (jedna sesja = jeden język docelowy na raz).
 - Integracja z Zoom (np. jako bot-interpreter na kanale Language Interpretation).
 - Miksowanie przetłumaczonego dźwięku z oryginałem.
-- Klonowanie głosu mówcy (funkcja dostępna w API Palabra, nieużywana tutaj).

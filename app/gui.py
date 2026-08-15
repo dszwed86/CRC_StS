@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import sys
 import threading
+import time
+import urllib.request
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QTextBlock, QTextCursor
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QTextBlock, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -47,6 +50,7 @@ from .audio_io import (
     find_virtual_cable,
     list_input_devices,
     list_output_devices,
+    play_test_tone,
     probe_audio_file,
     rescan_devices,
 )
@@ -310,6 +314,7 @@ class SessionWorker(QObject):
         self._runner: TranslationRunner | None = None
         self._mic_source: MicStream | None = None
         self._mixed_source: MixedSource | None = None
+        self._sink: OutputSink | None = None
         # Created here (not in start()) so stop() is safe to call the instant the
         # worker exists, even before the background thread has begun running —
         # otherwise a fast Start-then-Stop click could be silently lost.
@@ -326,6 +331,10 @@ class SessionWorker(QObject):
     @property
     def mic_level(self) -> float:
         return self._mixed_source.mic_level if self._mixed_source else 0.0
+
+    @property
+    def output_level(self) -> float:
+        return self._sink.level if self._sink else 0.0
 
     def start(self) -> None:
         # WASAPI (the audio backend selected for every device on Windows --
@@ -365,6 +374,7 @@ class SessionWorker(QObject):
             source_cm = MixedSource(mic, file)
             self._mixed_source = source_cm
             with source_cm as source, OutputSink(device=self._output_device) as sink:
+                self._sink = sink
                 self._runner = TranslationRunner(
                     api_key=self._api_key,
                     region=REGION,
@@ -477,9 +487,57 @@ _STATE_LABELS = {
     SessionState.ERROR: "Błąd",
 }
 
+# Palabra S2S pricing (see README) -- used only for a rough, client-side
+# running estimate next to the session timer. Palabra doesn't expose actual
+# balance/usage via API (see the Settings dialog's "Otwórz panel Palabra"),
+# so this is deliberately approximate, not authoritative.
+PALABRA_COST_PER_MINUTE_USD = 0.04
+
+
 def _fmt_ms(ms: float) -> str:
     total_seconds = int(ms // 1000)
     return f"{total_seconds // 60:02d}:{total_seconds % 60:02d}"
+
+
+def _is_newer_version(candidate: str, current: str) -> bool:
+    """Compares two dotted version strings numerically (1.10.0 > 1.9.0),
+    not lexicographically. Malformed input (missing/non-numeric parts)
+    is treated as "not newer" -- never blocks/crashes the check."""
+    try:
+        candidate_parts = tuple(int(p) for p in candidate.strip().split("."))
+        current_parts = tuple(int(p) for p in current.strip().split("."))
+    except ValueError:
+        return False
+    return candidate_parts > current_parts
+
+
+class UpdateChecker(QObject):
+    """Checks GitHub's "latest release" once in the background and reports
+    back only if it's actually newer than this running build. Silent on any
+    failure (offline, rate-limited, GitHub down, unexpected response shape)
+    -- this is a courtesy notice, never allowed to interrupt or delay
+    startup, so failures are swallowed rather than surfaced anywhere.
+    """
+
+    update_found = Signal(str, str)  # new_version, release_url
+
+    def start(self) -> None:
+        threading.Thread(target=self._check, daemon=True).start()
+
+    def _check(self) -> None:
+        try:
+            request = urllib.request.Request(
+                "https://api.github.com/repos/dszwed86/CRC_StS/releases/latest",
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            latest_version = str(data.get("tag_name", "")).lstrip("v")
+            release_url = str(data.get("html_url", ""))
+            if latest_version and release_url and _is_newer_version(latest_version, __version__):
+                self.update_found.emit(latest_version, release_url)
+        except Exception:
+            pass
 
 
 class MainWindow(QMainWindow):
@@ -506,6 +564,13 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         settings_row = QHBoxLayout()
+        self.update_btn = QPushButton("")
+        self.update_btn.setVisible(False)
+        self.update_btn.setStyleSheet("QPushButton { color: #1a73e8; border: none; text-decoration: underline; }")
+        self.update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_btn.clicked.connect(self._on_open_update_url)
+        self._update_url: str | None = None
+        settings_row.addWidget(self.update_btn)
         settings_row.addStretch()
         self.settings_btn = QPushButton("Ustawienia...")
         self.settings_btn.clicked.connect(self._open_settings)
@@ -639,7 +704,34 @@ class MainWindow(QMainWindow):
         if cable is not None:
             self.output_combo.setCurrentIndex(self._output_devices.index(cable))
             self.output_hint.setVisible(False)
-        form.addRow("Wyjście (do OBS):", self.output_combo)
+
+        output_row = QHBoxLayout()
+        output_row.addWidget(self.output_combo, stretch=1)
+        self.test_output_btn = QPushButton("Testuj wyjście")
+        self.test_output_btn.setToolTip(
+            "Odtwarza krótki dźwięk testowy na wybrane urządzenie wyjściowe -- "
+            "bez uruchamiania sesji Palabra, więc bez kosztu -- przydatne do sprawdzenia, "
+            "czy OBS faktycznie odbiera dźwięk z tego urządzenia."
+        )
+        self.test_output_btn.clicked.connect(self._on_test_output)
+        output_row.addWidget(self.test_output_btn)
+        form.addRow("Wyjście (do OBS):", output_row)
+
+        output_level_row = QHBoxLayout()
+        output_level_row.addWidget(QLabel("Poziom wyjścia:"))
+        self.output_level_bar = QProgressBar()
+        self.output_level_bar.setRange(0, 100)
+        self.output_level_bar.setValue(0)
+        self.output_level_bar.setTextVisible(False)
+        self.output_level_bar.setFixedHeight(10)
+        self.output_level_bar.setToolTip(
+            "Poziom dźwięku faktycznie odtwarzanego na wybrane wyjście, na żywo, w trakcie "
+            "trwającej sesji -- potwierdza, że przetłumaczone audio realnie dociera do "
+            "urządzenia (np. wirtualnego kabla), a nie tylko że zostało odebrane."
+        )
+        self.output_level_bar.setStyleSheet("QProgressBar::chunk { background-color: #2196f3; }")
+        output_level_row.addWidget(self.output_level_bar, stretch=1)
+        form.addRow("", output_level_row)
 
         self.subtitles_only_check = QCheckBox("Tylko napisy (bez dźwięku)")
         self.subtitles_only_check.setToolTip(
@@ -683,7 +775,9 @@ class MainWindow(QMainWindow):
         root.addWidget(self.output_hint)
 
         self.pause_btn = QPushButton("Pauza")
-        self.pause_btn.setToolTip("Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku.")
+        self.pause_btn.setToolTip(
+            "Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku. (F6)"
+        )
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._on_pause_resume)
 
@@ -696,21 +790,38 @@ class MainWindow(QMainWindow):
         self._level_timer = QTimer(self)
         self._level_timer.setInterval(80)
         self._level_timer.timeout.connect(self._update_level_meter)
+        self._level_timer.timeout.connect(self._update_session_display)
 
         self._is_paused = False
         self._file_paused = False
         self._pause_request_pending = False
         self._partial_line_active = False  # last log line is a growing, not-yet-final transcript
         self._show_lang_tags = True
+        # Billable session time (see _on_state): accumulates only while the
+        # server-side session is actually RUNNING, not during Pauza -- matches
+        # what Palabra is actually charging for, per the "Pauza also stops
+        # billing" behavior already documented in the README.
+        self._session_billable_seconds = 0.0
+        self._session_running_since: float | None = None
 
         control_row = QHBoxLayout()
         self.status_label = QLabel("Gotowy")
+        self.session_time_label = QLabel("")
         self.start_stop_btn = QPushButton("Start")
         self.start_stop_btn.clicked.connect(self._on_start_stop)
         control_row.addWidget(self.status_label, stretch=1)
+        control_row.addWidget(self.session_time_label)
         control_row.addWidget(self.pause_btn)
         control_row.addWidget(self.start_stop_btn)
         root.addLayout(control_row)
+
+        # F-keys, not letter/Space combos: this window has several text-entry
+        # widgets (voice_custom_edit, api_key_edit in Settings), and a
+        # QShortcut fires regardless of which child widget has focus --
+        # letters or Space would steal keystrokes while typing.
+        self.start_stop_btn.setToolTip("F5")
+        QShortcut(QKeySequence("F5"), self, activated=self._on_start_stop)
+        QShortcut(QKeySequence("F6"), self, activated=self._on_pause_resume)
 
         log_filter_row = QHBoxLayout()
         log_filter_row.addWidget(QLabel("Pokaż w logu:"))
@@ -741,6 +852,10 @@ class MainWindow(QMainWindow):
         self.clear_transcript_btn = QPushButton("Wyczyść transkrypcję")
         self.clear_transcript_btn.clicked.connect(self._on_clear_transcript)
         overlay_row.addWidget(self.clear_transcript_btn)
+        self.open_error_log_btn = QPushButton("Otwórz log błędów")
+        self.open_error_log_btn.setToolTip("Otwiera ~/.sts_bridge/errors.log w domyślnym edytorze tekstu.")
+        self.open_error_log_btn.clicked.connect(self._on_open_error_log)
+        overlay_row.addWidget(self.open_error_log_btn)
         root.addLayout(overlay_row)
 
         self.log = QPlainTextEdit()
@@ -782,6 +897,19 @@ class MainWindow(QMainWindow):
         ]
 
         self._apply_saved_app_settings(config.load_app_settings())
+
+        self._update_checker = UpdateChecker()
+        self._update_checker.update_found.connect(self._on_update_found, Qt.ConnectionType.QueuedConnection)
+        self._update_checker.start()
+
+    def _on_update_found(self, version: str, url: str) -> None:
+        self._update_url = url
+        self.update_btn.setText(f"Dostępna nowa wersja v{version} -- kliknij, aby otworzyć")
+        self.update_btn.setVisible(True)
+
+    def _on_open_update_url(self) -> None:
+        if self._update_url:
+            QDesktopServices.openUrl(QUrl(self._update_url))
 
     def _apply_saved_app_settings(self, settings: dict) -> None:
         """Restores widget selections saved by _save_app_settings() on the
@@ -1027,6 +1155,15 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.set_gate_threshold(value / 100)
 
+    def _on_test_output(self) -> None:
+        if self.output_combo.count() == 0:
+            QMessageBox.warning(self, "Brak urządzenia wyjściowego", "System nie zgłasza żadnego urządzenia audio wyjściowego.")
+            return
+        try:
+            play_test_tone(self.output_combo.currentData())
+        except Exception as e:
+            QMessageBox.warning(self, "Błąd testu wyjścia", f"Nie udało się odtworzyć dźwięku testowego: {e}")
+
     def _on_start_stop(self) -> None:
         if self._worker is not None:
             self.start_stop_btn.setEnabled(False)
@@ -1103,6 +1240,9 @@ class MainWindow(QMainWindow):
         thread.start()
         self.start_stop_btn.setText("Stop")
         self._set_config_enabled(False)
+        self._session_billable_seconds = 0.0
+        self._session_running_since = None
+        self._update_session_display()
         self._level_timer.start()
         if self._selected_file is not None:
             self._file_paused = True
@@ -1120,6 +1260,15 @@ class MainWindow(QMainWindow):
     def _on_state(self, state: SessionState) -> None:
         self._pause_request_pending = False
         self.status_label.setText(_STATE_LABELS.get(state, str(state)))
+        if state == SessionState.RUNNING:
+            if self._session_running_since is None:
+                self._session_running_since = time.monotonic()
+        elif self._session_running_since is not None:
+            # Leaving RUNNING (Pauza, Stop, or an error) -- fold the elapsed
+            # stretch into the running total and stop the clock, matching
+            # Palabra actually stopping billing on Pauza (see README).
+            self._session_billable_seconds += time.monotonic() - self._session_running_since
+            self._session_running_since = None
         if state == SessionState.PAUSED:
             self._is_paused = True
             self.pause_btn.setText("Wznów")
@@ -1134,6 +1283,7 @@ class MainWindow(QMainWindow):
         # user launch a new session before the old device handle is actually freed.
 
     def _on_worker_finished(self) -> None:
+        self._update_session_display()  # freeze the label at its final total, not mid-tick
         self._worker = None
         self._thread = None
         self.start_stop_btn.setText("Start")
@@ -1142,6 +1292,7 @@ class MainWindow(QMainWindow):
         self._position_timer.stop()
         self._level_timer.stop()
         self.mic_level_bar.setValue(0)
+        self.output_level_bar.setValue(0)
         self._is_paused = False
         self.pause_btn.setText("Pauza")
         self.pause_btn.setEnabled(False)
@@ -1198,8 +1349,20 @@ class MainWindow(QMainWindow):
         if self._worker is None:
             self._level_timer.stop()
             self.mic_level_bar.setValue(0)
+            self.output_level_bar.setValue(0)
             return
         self.mic_level_bar.setValue(int(self._worker.mic_level * 100))
+        self.output_level_bar.setValue(int(self._worker.output_level * 100))
+
+    def _update_session_display(self) -> None:
+        if self._worker is None:
+            return
+        total_seconds = self._session_billable_seconds
+        if self._session_running_since is not None:
+            total_seconds += time.monotonic() - self._session_running_since
+        minutes, seconds = divmod(int(total_seconds), 60)
+        cost = (total_seconds / 60) * PALABRA_COST_PER_MINUTE_USD
+        self.session_time_label.setText(f"{minutes:02d}:{seconds:02d} (~${cost:.2f})")
 
     def _on_transcript(self, event: TranscriptEvent) -> None:
         # Kept so a newly-opened overlay can be backfilled (see _open_overlay)
@@ -1327,6 +1490,12 @@ class MainWindow(QMainWindow):
         self._log_repeat_block = {True: None, False: None}
         if self._overlay is not None:
             self._overlay.clear()
+
+    def _on_open_error_log(self) -> None:
+        if not config.ERROR_LOG_PATH.exists():
+            QMessageBox.information(self, "Brak błędów", "Jeszcze żaden błąd nie został zapisany -- plik errors.log nie istnieje.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(config.ERROR_LOG_PATH)))
 
     def _replace_last_log_line(self, text: str) -> None:
         cursor = self.log.textCursor()

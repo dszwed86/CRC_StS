@@ -144,6 +144,18 @@ def list_output_devices() -> list[DeviceInfo]:
     ]
 
 
+def play_test_tone(device: int | None, duration_s: float = 1.0, freq: float = 440.0) -> None:
+    """Plays a short sine-wave test tone on the given output device, without
+    touching the Palabra API at all -- lets the user confirm OBS is actually
+    picking up sound from this device before starting a real (paid) session.
+    Non-blocking: sd.play() manages its own playback stream in the
+    background, so this returns immediately.
+    """
+    t = np.linspace(0, duration_s, int(RATE * duration_s), endpoint=False)
+    tone = (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    sd.play(tone, samplerate=RATE, device=device)
+
+
 _VIRTUAL_CABLE_MARKERS = ("cable", "blackhole")
 
 
@@ -705,6 +717,14 @@ class OutputSink:
     def __init__(self, device: int | None = None):
         self._q: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
         self._buffer = np.zeros(0, dtype=np.int16)
+        # Live output level (0.0-1.0, peak amplitude), for a GUI meter that
+        # confirms translated audio is actually reaching the device -- not
+        # just that it was received (a stalled/empty playback buffer still
+        # counts as "not reaching the device"). Computed from outdata, the
+        # ACTUAL samples handed to the audio driver each callback (silence
+        # included), same "single writer, plain float" reasoning as
+        # MicStream.level.
+        self.level: float = 0.0
         # Set from another thread by clear() (after a seek); only ever read/acted
         # on inside _on_playback, so self._buffer itself is written exclusively by
         # the realtime callback thread -- no lock needed. A lock here previously
@@ -736,6 +756,7 @@ class OutputSink:
             self._buffer = self._buffer[frames:]
         else:
             outdata.fill(0)
+        self.level = min(1.0, int(np.abs(outdata).max()) / 32767) if outdata.size else 0.0
 
     def __enter__(self) -> "OutputSink":
         try:
