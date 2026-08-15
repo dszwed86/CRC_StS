@@ -236,6 +236,9 @@ WASAPI, WDM-KS), więc aplikacja pokazuje tylko wersję WASAPI każdego urządze
 - **Wyczyść transkrypcję** — jedyny sposób na wyczyszczenie logu, historii i okienka overlay.
   Kliknięcie Start/Stop **nie** czyści ich automatycznie — kolejne sesje w ramach tego samego
   uruchomienia apki doklejają się do tego, co już było, dopóki nie klikniesz tego przycisku.
+- **Błędy zapisują się też do pliku** `~/.sts_bridge/errors.log` (z znacznikiem czasu), oprócz
+  pokazania się w logu głównego okna — nigdy w okienku z napisami. Przydatne, żeby odtworzyć
+  błąd sprzed zamknięcia aplikacji albo taki, który wyszedł z widocznego zakresu logu.
 
 ### Odczepiane okienko z tłumaczeniem (do OBS)
 

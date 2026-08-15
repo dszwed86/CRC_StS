@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ CONFIG_DIR = Path.home() / ".sts_bridge"
 ENV_PATH = CONFIG_DIR / ".env"
 OVERLAY_SETTINGS_PATH = CONFIG_DIR / "overlay_settings.json"
 SAVED_VOICES_PATH = CONFIG_DIR / "saved_voices.json"
+ERROR_LOG_PATH = CONFIG_DIR / "errors.log"
 
 DEFAULT_REGION = "eu"
 
@@ -40,6 +42,22 @@ def save_credentials(api_key: str, region: str = DEFAULT_REGION) -> None:
         ENV_PATH.touch()
     set_key(str(ENV_PATH), "PALABRA_API_KEY", api_key)
     set_key(str(ENV_PATH), "PALABRA_REGION", region)
+
+
+def log_error(message: str) -> None:
+    """Appends a timestamped error line to ~/.sts_bridge/errors.log, so a
+    problem that scrolled out of the in-app log (or happened in a past
+    session) can still be found afterward. Never raises -- a failure to
+    write the log must not itself crash the app or interrupt error
+    reporting to the GUI, which is the primary channel this supplements.
+    """
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().isoformat(sep=" ", timespec="seconds")
+        with open(ERROR_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except OSError:
+        pass
 
 
 _OVERLAY_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {

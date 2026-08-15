@@ -1216,6 +1216,7 @@ class MainWindow(QMainWindow):
         self._log_repeat_state = {True: (None, 0), False: (None, 0)}
         self._log_repeat_block = {True: None, False: None}
         self.log.appendPlainText(message)
+        config.log_error(message)
 
     def _on_toggle_overlay(self) -> None:
         if self._overlay is None:
