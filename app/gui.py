@@ -1473,11 +1473,11 @@ class MainWindow(QMainWindow):
         minutes, seconds = divmod(int(total_seconds), 60)
         cost = _estimated_cost(total_seconds)
         text = f"{minutes:02d}:{seconds:02d} (~${cost:.2f})"
+        if self._overlay is not None:
+            self._overlay.set_session_time(text)
         if self._balance_usd is not None:
             text += f" | saldo ~${self._balance_usd - cost:.2f}"
         self.session_time_label.setText(text)
-        if self._overlay is not None:
-            self._overlay.set_session_time(text)
 
     def _on_transcript(self, event: TranscriptEvent) -> None:
         # Kept so a newly-opened overlay can be backfilled (see _open_overlay)
