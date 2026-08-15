@@ -1387,13 +1387,6 @@ class MainWindow(QMainWindow):
                 self._balance_usd -= final_cost
                 config.save_balance(self._balance_usd)
         self._update_session_display()  # freeze the main-window label at its final total, not mid-tick
-        if self._overlay is not None:
-            # Unlike the main window's label (kept as a small end-of-session
-            # summary), the overlay badge is "session in progress" chrome
-            # sitting in the middle of whatever's being captured for OBS --
-            # hide it once there's no session to report on, rather than
-            # leaving a stale frozen total in the video feed.
-            self._overlay.set_session_time("")
         self._worker = None
         self._thread = None
         self.start_stop_btn.setText("Start")
@@ -1473,8 +1466,6 @@ class MainWindow(QMainWindow):
         minutes, seconds = divmod(int(total_seconds), 60)
         cost = _estimated_cost(total_seconds)
         text = f"{minutes:02d}:{seconds:02d} (~${cost:.2f})"
-        if self._overlay is not None:
-            self._overlay.set_session_time(text)
         if self._balance_usd is not None:
             text += f" | saldo ~${self._balance_usd - cost:.2f}"
         self.session_time_label.setText(text)

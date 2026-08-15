@@ -289,9 +289,6 @@ Przycisk **"Odczep okienko z tłumaczeniem"** otwiera osobne, bezramkowe okno po
 na żywo napisy — do przechwycenia w OBS jako Window Capture, niezależnie od głównego okna
 aplikacji. Obsługa:
 
-- **Znaczek z czasem sesji** (prawy górny róg) — to samo co licznik czasu/kosztu w głównym
-  oknie, widoczne bez przełączania się z powrotem do apki podczas transmisji. Widoczny tylko
-  w trakcie trwającej sesji — znika, gdy sesja się kończy.
 - **Kolejne zdania tej samej wypowiedzi łączą się w jedną linijkę** — nowa linijka zaczyna
   się dopiero po dłuższej przerwie w mówieniu (ok. 2,5 s), traktowanej jako nowa myśl.
 - **Najnowsza wypowiedź zawsze jest widoczna** — jeśli tekstu jest więcej, niż mieści się w
