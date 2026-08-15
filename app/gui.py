@@ -775,6 +775,78 @@ class MainWindow(QMainWindow):
             self.refresh_devices_btn,
         ]
 
+        self._apply_saved_app_settings(config.load_app_settings())
+
+    def _apply_saved_app_settings(self, settings: dict) -> None:
+        """Restores widget selections saved by _save_app_settings() on the
+        previous run. Each field is applied independently and only if still
+        valid (e.g. a saved device name that's no longer connected, or a
+        saved language code that's no longer in the list, is silently
+        skipped) -- one stale field must never block the rest from applying.
+        """
+        mic_name = settings.get("mic_device_name")
+        if mic_name:
+            idx = self.mic_combo.findText(mic_name)
+            if idx >= 0:
+                self.mic_combo.setCurrentIndex(idx)
+        output_name = settings.get("output_device_name")
+        if output_name:
+            idx = self.output_combo.findText(output_name)
+            if idx >= 0:
+                self.output_combo.setCurrentIndex(idx)
+        if "mic_gain" in settings:
+            self.mic_gain_slider.setValue(int(settings["mic_gain"]))
+        if "mic_gate" in settings:
+            self.mic_gate_slider.setValue(int(settings["mic_gate"]))
+        if "subtitles_only" in settings:
+            self.subtitles_only_check.setChecked(bool(settings["subtitles_only"]))
+        source_lang = settings.get("source_lang")
+        if source_lang:
+            idx = self.source_lang_combo.findData(source_lang)
+            if idx >= 0:
+                self.source_lang_combo.setCurrentIndex(idx)
+        target_lang = settings.get("target_lang")
+        if target_lang:
+            idx = self.target_lang_combo.findData(target_lang)
+            if idx >= 0:
+                self.target_lang_combo.setCurrentIndex(idx)
+        if "voice_kind" in settings:
+            # Not findData(): QComboBox.findData() unreliably fails to match
+            # a tuple containing None (e.g. ("custom", None)) through Qt's
+            # QVariant wrapping -- a plain scan over itemData() compares the
+            # actual Python tuples directly instead.
+            wanted = (settings["voice_kind"], settings.get("voice_id"))
+            for i in range(self.voice_combo.count()):
+                if self.voice_combo.itemData(i) == wanted:
+                    self.voice_combo.setCurrentIndex(i)
+                    break
+        if "voice_custom_text" in settings:
+            self.voice_custom_edit.setText(settings["voice_custom_text"])
+        log_filter = settings.get("log_filter")
+        if log_filter:
+            idx = self.log_filter_combo.findData(log_filter)
+            if idx >= 0:
+                self.log_filter_combo.setCurrentIndex(idx)
+        if "show_lang_tags" in settings:
+            self.show_tags_check.setChecked(bool(settings["show_lang_tags"]))
+
+    def _save_app_settings(self) -> None:
+        voice_kind, voice_id = self.voice_combo.currentData() if self.voice_combo.count() else ("auto", None)
+        config.save_app_settings({
+            "mic_device_name": self.mic_combo.currentText(),
+            "output_device_name": self.output_combo.currentText(),
+            "mic_gain": self.mic_gain_slider.value(),
+            "mic_gate": self.mic_gate_slider.value(),
+            "subtitles_only": self.subtitles_only_check.isChecked(),
+            "source_lang": self.source_lang_combo.currentData(),
+            "target_lang": self.target_lang_combo.currentData(),
+            "voice_kind": voice_kind,
+            "voice_id": voice_id,
+            "voice_custom_text": self.voice_custom_edit.text(),
+            "log_filter": self.log_filter_combo.currentData(),
+            "show_lang_tags": self.show_tags_check.isChecked(),
+        })
+
     def _set_config_enabled(self, enabled: bool) -> None:
         for w in self._config_widgets:
             w.setEnabled(enabled)
@@ -834,8 +906,17 @@ class MainWindow(QMainWindow):
             self.voice_combo.addItem(v["name"], ("id", v["voice_id"]))
         self.voice_combo.addItem("Inny (ID z portalu Palabra)...", ("custom", None))
         if current is not None:
-            idx = self.voice_combo.findData(current)
-            self.voice_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            # Not findData(): unreliably fails to match a tuple containing
+            # None (e.g. ("clone", None), ("custom", None)) through Qt's
+            # QVariant wrapping -- previously meant selecting "Klonowanie"
+            # or "Inny..." and then rebuilding (e.g. via "Zapisane głosy...")
+            # silently reset the selection back to "auto" (index 0).
+            idx = 0
+            for i in range(self.voice_combo.count()):
+                if self.voice_combo.itemData(i) == current:
+                    idx = i
+                    break
+            self.voice_combo.setCurrentIndex(idx)
         self.voice_combo.blockSignals(False)
         self._on_voice_mode_changed(self.voice_combo.currentIndex())
 
@@ -1327,6 +1408,7 @@ class MainWindow(QMainWindow):
                     self.status_label.setText("Zatrzymywanie...")
                     event.ignore()
                     return
+        self._save_app_settings()
         if self._overlay is not None:
             self._overlay.close()
         super().closeEvent(event)

@@ -92,6 +92,12 @@ Wynik ląduje w `dist/`.
 
 </details>
 
+**Ustawienia zapamiętują się między uruchomieniami** — wybrany mikrofon/wyjście, głośność
+i próg czułości mikrofonu, języki, głos, "Tylko napisy", filtr i tagi w logu zapisują się do
+`~/.sts_bridge/app_settings.json` przy zamknięciu aplikacji i wracają przy następnym starcie.
+Ustawienie, które wskazuje na już niepodłączone urządzenie albo nieistniejący język, jest po
+prostu pomijane (reszta wraca normalnie) zamiast powodować błąd.
+
 Przy pierwszym uruchomieniu kliknij **Ustawienia...** i wklej klucz API Palabra —
 zostanie zapisany lokalnie w `~/.sts_bridge/.env`. W tym samym oknie:
 

@@ -17,6 +17,7 @@ ENV_PATH = CONFIG_DIR / ".env"
 OVERLAY_SETTINGS_PATH = CONFIG_DIR / "overlay_settings.json"
 SAVED_VOICES_PATH = CONFIG_DIR / "saved_voices.json"
 ERROR_LOG_PATH = CONFIG_DIR / "errors.log"
+APP_SETTINGS_PATH = CONFIG_DIR / "app_settings.json"
 
 DEFAULT_REGION = "eu"
 
@@ -58,6 +59,46 @@ def log_error(message: str) -> None:
             f.write(f"[{timestamp}] {message}\n")
     except OSError:
         pass
+
+
+_APP_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {
+    "mic_device_name": str,
+    "output_device_name": str,
+    "mic_gain": (int, float),
+    "mic_gate": (int, float),
+    "subtitles_only": bool,
+    "source_lang": str,
+    "target_lang": str,
+    "voice_kind": str,
+    "voice_id": (str, type(None)),
+    "voice_custom_text": str,
+    "log_filter": str,
+    "show_lang_tags": bool,
+}
+
+
+def load_app_settings() -> dict[str, Any]:
+    """Reads saved main-window settings (device/language/voice/log filter
+    preferences) from disk, or {} if none/corrupt yet."""
+    if not APP_SETTINGS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(APP_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        k: v
+        for k, v in data.items()
+        if k not in _APP_SETTINGS_TYPES or isinstance(v, _APP_SETTINGS_TYPES[k])
+    }
+
+
+def save_app_settings(settings: dict[str, Any]) -> None:
+    """Writes the main-window settings to disk as JSON."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    APP_SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
 _OVERLAY_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {
