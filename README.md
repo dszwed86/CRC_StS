@@ -112,6 +112,17 @@ zostanie zapisany lokalnie w `~/.sts_bridge/.env`. W tym samym oknie:
   `platform.palabra.ai/api-keys`, gdzie widoczne jest saldo kredytów i historia użycia.
   Palabra nie udostępnia tego w publicznym API, więc apka nie może pokazać salda
   bezpośrednio — to najbliższe dostępne rozwiązanie.
+- **Saldo Palabra (USD, orientacyjne)** — opcjonalne pole: wpisz tu saldo sprawdzone w panelu
+  Palabry (wyżej), a aplikacja będzie je na bieżąco pomniejszać o szacowany koszt każdej
+  sesji (licznik obok Start pokaże "saldo ~$X.XX"). To tylko **przybliżenie liczone lokalnie**,
+  nie prawdziwe saldo — może się rozjechać z rzeczywistością (np. jeśli ten sam klucz API jest
+  używany też gdzie indziej, albo aplikacja zamknie się w trakcie sesji bez czystego Stop).
+  Wróć tu od czasu do czasu i wpisz aktualną wartość z panelu Palabry, żeby zsynchronizować.
+  Puste pole przy zapisie zostawia zapisane saldo bez zmian (nie zeruje go).
+- **Historia sesji...** — lista zakończonych sesji (data, czas trwania, orientacyjny koszt)
+  zapisywana lokalnie w `~/.sts_bridge/session_history.json`, z sumą na dole. Jedyny zapis
+  przeszłego zużycia dostępny w samej aplikacji, skoro Palabra nie udostępnia historii przez
+  API. Przycisk **Wyczyść historię** w tym oknie usuwa cały zapis (nieodwracalnie).
 
 **Błąd o certyfikacie przy łączeniu z API (macOS)** — Python z instalatora python.org nie
 podpina się automatycznie pod systemowy magazyn certyfikatów, więc każde połączenie z API
@@ -278,6 +289,9 @@ Przycisk **"Odczep okienko z tłumaczeniem"** otwiera osobne, bezramkowe okno po
 na żywo napisy — do przechwycenia w OBS jako Window Capture, niezależnie od głównego okna
 aplikacji. Obsługa:
 
+- **Znaczek z czasem sesji** (prawy górny róg) — to samo co licznik czasu/kosztu w głównym
+  oknie, widoczne bez przełączania się z powrotem do apki podczas transmisji. Widoczny tylko
+  w trakcie trwającej sesji — znika, gdy sesja się kończy.
 - **Kolejne zdania tej samej wypowiedzi łączą się w jedną linijkę** — nowa linijka zaczyna
   się dopiero po dłuższej przerwie w mówieniu (ok. 2,5 s), traktowanej jako nowa myśl.
 - **Najnowsza wypowiedź zawsze jest widoczna** — jeśli tekstu jest więcej, niż mieści się w
@@ -306,6 +320,18 @@ aplikacji. Obsługa:
     jest tylko tekst.
   - "Zawsze na wierzchu".
 - **Prawy klik → Zamknij okienko** (albo ponowne kliknięcie przycisku w głównym oknie) je zamyka.
+
+## Odporność na zerwane połączenie
+
+Jeśli połączenie WebSocket z Palabrą padnie w trakcie sesji (np. krótka przerwa w sieci), apka
+**sama próbuje połączyć się ponownie** — do 3 prób, z rosnącym odstępem (2s/5s/10s). Status
+pokazuje wtedy "Rozłączono, ponawiam próbę...". Mikrofon i plik działają cały czas normalnie
+w tle — to, co zostało powiedziane w trakcie samej przerwy, nie zostanie przetłumaczone (nie ma
+buforowania na zapas), ale po udanym ponownym połączeniu tłumaczenie od razu wraca do bieżącego
+momentu, zamiast doganiać zaległość. Każda udana, w pełni działająca sesja odnawia pulę 3 prób
+od nowa, więc pojedyncza wcześniejsza przerwa nie "zużywa" prób na później. Jeśli wszystkie
+próby zawiodą (albo błąd nie nadaje się do ponawiania, np. zły klucz API), sesja kończy się
+zwykłym Błędem jak dotychczas — trzeba kliknąć Start ręcznie.
 
 ## Szybkość tłumaczenia
 

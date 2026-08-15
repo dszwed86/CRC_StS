@@ -124,6 +124,22 @@ class OverlayWindow(QWidget):
         self.caption_view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.caption_view.setGeometry(self.rect())
 
+        # Small "MM:SS (~$X.XX)" badge, top-right corner -- set live by
+        # MainWindow via set_session_time() while a session is running,
+        # hidden otherwise. Independent of caption_view/_lines: it's status
+        # chrome, not a caption, so it's never subject to the log filter,
+        # repeat-collapsing, or MAX_LINES trimming that governs captions.
+        self.session_time_label = QLabel(self)
+        self.session_time_label.setStyleSheet(
+            "QLabel { color: rgba(255, 255, 255, 200); background-color: rgba(0, 0, 0, 120); "
+            "padding: 2px 6px; border-radius: 3px; }"
+        )
+        font = QFont(self._font.family(), max(10, int(self._font.pointSize() * 0.5)))
+        self.session_time_label.setFont(font)
+        self.session_time_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.session_time_label.adjustSize()
+        self.session_time_label.setVisible(False)
+
         self._grip = QSizeGrip(self)
         self._lines: list[str] = []
         # Parallel to _lines (kept in lockstep, including trimming) so a
@@ -446,7 +462,19 @@ class OverlayWindow(QWidget):
         self._scroll_to_bottom()
         grip_size = self._grip.sizeHint()
         self._grip.move(self.width() - grip_size.width(), self.height() - grip_size.height())
+        self._reposition_session_time_label()
         self._geometry_save_timer.start()
+
+    def _reposition_session_time_label(self) -> None:
+        self.session_time_label.adjustSize()
+        self.session_time_label.move(self.width() - self.session_time_label.width() - 6, 6)
+
+    def set_session_time(self, text: str) -> None:
+        """Called live by MainWindow while a session is running (empty text
+        hides it, e.g. once the session ends)."""
+        self.session_time_label.setText(text)
+        self.session_time_label.setVisible(bool(text))
+        self._reposition_session_time_label()
 
     def moveEvent(self, event) -> None:
         super().moveEvent(event)

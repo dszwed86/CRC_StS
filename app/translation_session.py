@@ -18,9 +18,18 @@ from enum import Enum, auto
 from typing import Protocol
 
 from palabra_ai import Audio, Palabra, ServerWarning, Transcript
-from palabra_ai.exc import PalabraError
+from palabra_ai.exc import NotReadyError, PalabraError, SessionError
 
 from .audio_io import FileStream
+
+# Auto-reconnect (see TranslationRunner.run()): only SessionError ("WebSocket
+# connection or session failure") and NotReadyError (pipeline didn't confirm
+# in time) are retried -- both are plausibly transient network/timing blips.
+# AuthError/TaskError are never retried: a bad key or a rejected command
+# won't fix itself by reconnecting, so failing fast matches today's
+# behavior for those.
+RECONNECT_MAX_ATTEMPTS = 3
+RECONNECT_BACKOFF_SECONDS = (2.0, 5.0, 10.0)
 
 
 class AudioSource(Protocol):
@@ -33,6 +42,7 @@ class AudioSink(Protocol):
 
 class SessionState(Enum):
     CONNECTING = auto()
+    RECONNECTING = auto()
     RUNNING = auto()
     PAUSED = auto()
     STOPPED = auto()
@@ -257,75 +267,111 @@ class TranslationRunner:
                 self._source.resume()
 
     async def run(self) -> None:
-        self._on_state(SessionState.CONNECTING)
-        try:
-            async with self._palabra.translation(
-                source=self._source_lang,
-                targets=[self._target_lang],
-                voice_id=self._voice_id,
-                voice_cloning=self._voice_cloning,
-                # Lower perceived latency: translate partial (still-forming)
-                # transcriptions instead of waiting for each segment to be
-                # fully confirmed, and confirm a segment after a shorter
-                # silence gap (server default 0.7s). Trade-off: an earlier
-                # translation can occasionally get revised once the full
-                # segment is heard, and a speaker who pauses mid-sentence
-                # more than ~0.5s may see it split a bit eagerly.
-                translate_partials=True,
-                silence_threshold=0.5,
-            ) as session:
-                self._session = session
-                self._on_state(SessionState.RUNNING)
+        """Runs the session, auto-reconnecting up to RECONNECT_MAX_ATTEMPTS
+        times (with growing backoff) on a dropped WebSocket/session -- see
+        RECONNECT_MAX_ATTEMPTS's comment for exactly which failures qualify.
+        Audio spoken during a reconnect gap is NOT buffered/replayed: the
+        source (mic/file) keeps advancing in real time regardless, so
+        whatever was "said" during the gap is simply never sent -- picking
+        the session back up live once reconnected, rather than risking a
+        replayed backlog triggering the server's "arriving faster than
+        real-time" warning (the same failure mode already hit once trying
+        to change voice mid-stream).
+        """
+        attempt = 0
+        while True:
+            self._on_state(SessionState.RECONNECTING if attempt > 0 else SessionState.CONNECTING)
+            try:
+                async with self._palabra.translation(
+                    source=self._source_lang,
+                    targets=[self._target_lang],
+                    voice_id=self._voice_id,
+                    voice_cloning=self._voice_cloning,
+                    # Lower perceived latency: translate partial (still-forming)
+                    # transcriptions instead of waiting for each segment to be
+                    # fully confirmed, and confirm a segment after a shorter
+                    # silence gap (server default 0.7s). Trade-off: an earlier
+                    # translation can occasionally get revised once the full
+                    # segment is heard, and a speaker who pauses mid-sentence
+                    # more than ~0.5s may see it split a bit eagerly.
+                    translate_partials=True,
+                    silence_threshold=0.5,
+                ) as session:
+                    self._session = session
+                    self._on_state(SessionState.RUNNING)
+                    attempt = 0  # a session that actually connected earns a fresh retry budget
 
-                async def feed() -> None:
-                    async for chunk in self._source.chunks():
-                        if self._stop.is_set():
-                            break
-                        await session.send_audio(chunk)
-                    await session.end(eos_timeout=4)
+                    async def feed() -> None:
+                        async for chunk in self._source.chunks():
+                            if self._stop.is_set():
+                                break
+                            await session.send_audio(chunk)
+                        await session.end(eos_timeout=4)
 
-                feeder = asyncio.create_task(feed())
-                # If feed() raises (e.g. the source's chunks() blows up immediately --
-                # a corrupt/unsupported file, or the mic disappearing mid-session) with
-                # no audio ever having been sent, the receive loop below has nothing to
-                # do but wait for a server event that will now never arrive: it would
-                # otherwise hang forever, with Stop unable to help since nothing here
-                # ever checks self._stop between iterations of `async for event in
-                # session`. This callback cancels the still-running receive loop (i.e.
-                # this coroutine's own task) as soon as feed() fails, so the `finally`
-                # below can pick up feed()'s real exception via `await feeder` and
-                # report it properly instead of hanging.
-                receiving_task = asyncio.current_task()
+                    feeder = asyncio.create_task(feed())
+                    # If feed() raises (e.g. the source's chunks() blows up immediately --
+                    # a corrupt/unsupported file, or the mic disappearing mid-session) with
+                    # no audio ever having been sent, the receive loop below has nothing to
+                    # do but wait for a server event that will now never arrive: it would
+                    # otherwise hang forever, with Stop unable to help since nothing here
+                    # ever checks self._stop between iterations of `async for event in
+                    # session`. This callback cancels the still-running receive loop (i.e.
+                    # this coroutine's own task) as soon as feed() fails, so the `finally`
+                    # below can pick up feed()'s real exception via `await feeder` and
+                    # report it properly instead of hanging.
+                    receiving_task = asyncio.current_task()
 
-                def _abort_receive_on_feed_failure(t: asyncio.Task) -> None:
-                    if not t.cancelled() and t.exception() is not None and receiving_task is not None:
-                        receiving_task.cancel()
+                    def _abort_receive_on_feed_failure(t: asyncio.Task) -> None:
+                        if not t.cancelled() and t.exception() is not None and receiving_task is not None:
+                            receiving_task.cancel()
 
-                feeder.add_done_callback(_abort_receive_on_feed_failure)
-                try:
-                    async for event in session:
-                        if isinstance(event, Transcript):
-                            self._on_transcript(
-                                TranscriptEvent(
-                                    text=event.text,
-                                    language=event.language,
-                                    is_translation=event.is_translation,
-                                    is_final=event.is_eos,
+                    feeder.add_done_callback(_abort_receive_on_feed_failure)
+                    try:
+                        async for event in session:
+                            if isinstance(event, Transcript):
+                                self._on_transcript(
+                                    TranscriptEvent(
+                                        text=event.text,
+                                        language=event.language,
+                                        is_translation=event.is_translation,
+                                        is_final=event.is_eos,
+                                    )
                                 )
-                            )
-                        elif isinstance(event, Audio):
-                            if not self._mute_output:
-                                self._sink.play(event.pcm)
-                        elif isinstance(event, ServerWarning):
-                            self._on_error(f"Ostrzeżenie: {event.message}")
-                finally:
-                    feeder.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await feeder
-            self._on_state(SessionState.STOPPED)
-        except PalabraError as e:
-            self._on_error(f"Błąd: {e}")
-            self._on_state(SessionState.ERROR)
-        except Exception as e:  # unexpected (network, device, ...) — surface, don't crash silently
-            self._on_error(f"Nieoczekiwany błąd: {e}")
-            self._on_state(SessionState.ERROR)
+                            elif isinstance(event, Audio):
+                                if not self._mute_output:
+                                    self._sink.play(event.pcm)
+                            elif isinstance(event, ServerWarning):
+                                self._on_error(f"Ostrzeżenie: {event.message}")
+                    finally:
+                        feeder.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await feeder
+                self._on_state(SessionState.STOPPED)
+                return
+            except (SessionError, NotReadyError) as e:
+                if self._stop.is_set() or attempt >= RECONNECT_MAX_ATTEMPTS:
+                    self._on_error(f"Błąd: {e}")
+                    self._on_state(SessionState.ERROR)
+                    return
+                backoff = RECONNECT_BACKOFF_SECONDS[min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)]
+                attempt += 1
+                self._on_error(
+                    f"Połączenie przerwane ({e}) -- ponawiam próbę {attempt}/{RECONNECT_MAX_ATTEMPTS} za {backoff:.0f}s..."
+                )
+                elapsed = 0.0
+                while elapsed < backoff:
+                    if self._stop.is_set():
+                        self._on_state(SessionState.STOPPED)
+                        return
+                    await asyncio.sleep(0.2)
+                    elapsed += 0.2
+            except PalabraError as e:
+                self._on_error(f"Błąd: {e}")
+                self._on_state(SessionState.ERROR)
+                return
+            except Exception as e:  # unexpected (network, device, ...) — surface, don't crash silently
+                self._on_error(f"Nieoczekiwany błąd: {e}")
+                self._on_state(SessionState.ERROR)
+                return
+            finally:
+                self._session = None

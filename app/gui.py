@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import urllib.request
+from datetime import datetime
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
@@ -112,8 +113,19 @@ class SettingsDialog(QDialog):
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_edit.setPlaceholderText("Klucz API z platform.palabra.ai/api-keys")
 
+        saved_balance = config.load_balance()
+        self.balance_edit = QLineEdit("" if saved_balance is None else f"{saved_balance:.2f}")
+        self.balance_edit.setPlaceholderText("np. 45.00 -- sprawdź w panelu Palabra")
+        self.balance_edit.setToolTip(
+            "Szacunkowe saldo w USD. Palabra nie udostępnia prawdziwego salda przez API, więc "
+            "to tylko przybliżenie liczone przez aplikację (odejmuje szacowany koszt każdej "
+            "sesji) -- może się rozjechać z rzeczywistością. Wpisz tu aktualną wartość z panelu "
+            "Palabra, żeby zsynchronizować."
+        )
+
         form = QFormLayout()
         form.addRow("Klucz API Palabra:", self.api_key_edit)
+        form.addRow("Saldo Palabra (USD, orientacyjne):", self.balance_edit)
 
         test_row = QHBoxLayout()
         self.test_btn = QPushButton("Testuj klucz")
@@ -122,6 +134,9 @@ class SettingsDialog(QDialog):
         self.dashboard_btn.clicked.connect(self._on_open_dashboard)
         test_row.addWidget(self.test_btn)
         test_row.addWidget(self.dashboard_btn)
+
+        self.history_btn = QPushButton("Historia sesji...")
+        self.history_btn.clicked.connect(self._on_open_history)
 
         self.test_result_label = QLabel("")
         self.test_result_label.setWordWrap(True)
@@ -137,6 +152,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addLayout(test_row)
+        layout.addWidget(self.history_btn)
         layout.addWidget(self.test_result_label)
         layout.addWidget(buttons)
         layout.addWidget(version_label)
@@ -147,7 +163,17 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Brak klucza", "Podaj klucz API przed zapisaniem.")
             return
         config.save_credentials(api_key, REGION)
+        balance_text = self.balance_edit.text().strip()
+        if balance_text:  # empty means "leave the stored balance untouched"
+            try:
+                config.save_balance(float(balance_text.replace(",", ".")))
+            except ValueError:
+                QMessageBox.warning(self, "Nieprawidłowe saldo", "Saldo musi być liczbą, np. 45.00.")
+                return
         self.accept()
+
+    def _on_open_history(self) -> None:
+        SessionHistoryDialog(self).exec()
 
     def _on_open_dashboard(self) -> None:
         QDesktopServices.openUrl(QUrl(DASHBOARD_URL))
@@ -190,6 +216,57 @@ class SettingsDialog(QDialog):
             safety_timer.start(3000)
             wait_loop.exec()
         super().closeEvent(event)
+
+
+class SessionHistoryDialog(QDialog):
+    """Read-only view of past completed sessions (date, duration, estimated
+    cost) -- the only record of past spend available from within the app,
+    since Palabra doesn't expose per-session usage history via API."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Historia sesji")
+        self.resize(450, 350)
+
+        self.list_widget = QListWidget()
+        self.total_label = QLabel("")
+
+        self.clear_btn = QPushButton("Wyczyść historię")
+        self.clear_btn.clicked.connect(self._on_clear)
+        close_btn = QPushButton("Zamknij")
+        close_btn.clicked.connect(self.close)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.clear_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.list_widget)
+        layout.addWidget(self.total_label)
+        layout.addLayout(btn_row)
+
+        self._refresh()
+
+    def _refresh(self) -> None:
+        history = config.load_session_history()
+        self.list_widget.clear()
+        for entry in reversed(history):  # most recent first
+            try:
+                started = datetime.fromisoformat(entry["started_at"]).strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                started = entry["started_at"]
+            minutes, seconds = divmod(int(entry["duration_seconds"]), 60)
+            self.list_widget.addItem(f"{started} — {minutes:02d}:{seconds:02d} — ~${entry['cost_usd']:.2f}")
+        total_cost = sum(e["cost_usd"] for e in history)
+        self.total_label.setText(f"Razem: ~${total_cost:.2f} ({len(history)} sesji)")
+
+    def _on_clear(self) -> None:
+        answer = QMessageBox.question(
+            self, "Wyczyścić historię?", "Usunąć całą zapisaną historię sesji? Tego nie można cofnąć."
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            config.clear_session_history()
+            self._refresh()
 
 
 class SavedVoicesDialog(QDialog):
@@ -481,6 +558,7 @@ class SessionWorker(QObject):
 
 _STATE_LABELS = {
     SessionState.CONNECTING: "Łączenie...",
+    SessionState.RECONNECTING: "Rozłączono, ponawiam próbę...",
     SessionState.RUNNING: "Tłumaczę na żywo",
     SessionState.PAUSED: "Wstrzymano",
     SessionState.STOPPED: "Zatrzymano",
@@ -803,6 +881,8 @@ class MainWindow(QMainWindow):
         # billing" behavior already documented in the README.
         self._session_billable_seconds = 0.0
         self._session_running_since: float | None = None
+        self._session_started_at: str | None = None
+        self._balance_usd: float | None = config.load_balance()
 
         control_row = QHBoxLayout()
         self.status_label = QLabel("Gotowy")
@@ -1118,6 +1198,7 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
+        self._balance_usd = config.load_balance()  # may have been edited/synced just now
 
     def _on_refresh_devices(self) -> None:
         current_mic = self.mic_combo.currentData()
@@ -1242,6 +1323,7 @@ class MainWindow(QMainWindow):
         self._set_config_enabled(False)
         self._session_billable_seconds = 0.0
         self._session_running_since = None
+        self._session_started_at = datetime.now().isoformat(timespec="seconds")
         self._update_session_display()
         self._level_timer.start()
         if self._selected_file is not None:
@@ -1276,6 +1358,12 @@ class MainWindow(QMainWindow):
             self._is_paused = False
             self.pause_btn.setText("Pauza")
             self.pause_btn.setEnabled(True)
+        elif state == SessionState.RECONNECTING:
+            # Nothing to pause/resume mid-reconnect -- request_pause() would
+            # already no-op safely (self._session is None during the gap),
+            # but disabling the button avoids a click that visibly does
+            # nothing.
+            self.pause_btn.setEnabled(False)
         # Re-enabling controls happens in _on_worker_finished(), NOT here:
         # state_changed(STOPPED/ERROR) is emitted from inside TranslationRunner.run(),
         # while the mic/output device is still being released by the `with` block
@@ -1283,7 +1371,25 @@ class MainWindow(QMainWindow):
         # user launch a new session before the old device handle is actually freed.
 
     def _on_worker_finished(self) -> None:
-        self._update_session_display()  # freeze the label at its final total, not mid-tick
+        # _on_state(STOPPED/ERROR/...) already ran before this (see the
+        # comment below) and folded any final RUNNING stretch into
+        # _session_billable_seconds, so it's already the correct final
+        # total here -- nothing still "in flight" left to add.
+        final_seconds = self._session_billable_seconds
+        if final_seconds > 0 and self._session_started_at is not None:
+            final_cost = (final_seconds / 60) * PALABRA_COST_PER_MINUTE_USD
+            config.append_session_history(self._session_started_at, final_seconds, final_cost)
+            if self._balance_usd is not None:
+                self._balance_usd -= final_cost
+                config.save_balance(self._balance_usd)
+        self._update_session_display()  # freeze the main-window label at its final total, not mid-tick
+        if self._overlay is not None:
+            # Unlike the main window's label (kept as a small end-of-session
+            # summary), the overlay badge is "session in progress" chrome
+            # sitting in the middle of whatever's being captured for OBS --
+            # hide it once there's no session to report on, rather than
+            # leaving a stale frozen total in the video feed.
+            self._overlay.set_session_time("")
         self._worker = None
         self._thread = None
         self.start_stop_btn.setText("Start")
@@ -1362,7 +1468,12 @@ class MainWindow(QMainWindow):
             total_seconds += time.monotonic() - self._session_running_since
         minutes, seconds = divmod(int(total_seconds), 60)
         cost = (total_seconds / 60) * PALABRA_COST_PER_MINUTE_USD
-        self.session_time_label.setText(f"{minutes:02d}:{seconds:02d} (~${cost:.2f})")
+        text = f"{minutes:02d}:{seconds:02d} (~${cost:.2f})"
+        if self._balance_usd is not None:
+            text += f" | saldo ~${self._balance_usd - cost:.2f}"
+        self.session_time_label.setText(text)
+        if self._overlay is not None:
+            self._overlay.set_session_time(text)
 
     def _on_transcript(self, event: TranscriptEvent) -> None:
         # Kept so a newly-opened overlay can be backfilled (see _open_overlay)

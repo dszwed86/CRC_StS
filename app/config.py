@@ -18,6 +18,9 @@ OVERLAY_SETTINGS_PATH = CONFIG_DIR / "overlay_settings.json"
 SAVED_VOICES_PATH = CONFIG_DIR / "saved_voices.json"
 ERROR_LOG_PATH = CONFIG_DIR / "errors.log"
 APP_SETTINGS_PATH = CONFIG_DIR / "app_settings.json"
+BALANCE_PATH = CONFIG_DIR / "balance.json"
+SESSION_HISTORY_PATH = CONFIG_DIR / "session_history.json"
+MAX_SESSION_HISTORY_ENTRIES = 200  # avoid unbounded growth over months of use
 
 DEFAULT_REGION = "eu"
 
@@ -99,6 +102,67 @@ def save_app_settings(settings: dict[str, Any]) -> None:
     """Writes the main-window settings to disk as JSON."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     APP_SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
+
+def load_balance() -> float | None:
+    """Reads the user's manually-entered Palabra balance estimate (USD), or
+    None if never set. This is a rough, client-side ESTIMATE -- Palabra
+    doesn't expose real balance via API (see the Settings dialog's "Otwórz
+    panel Palabra" link) -- kept in sync by subtracting each session's
+    estimated cost as it ends. Can drift from the real balance (e.g. if the
+    same API key is also used elsewhere) and should be periodically
+    re-entered from the real dashboard value.
+    """
+    if not BALANCE_PATH.exists():
+        return None
+    try:
+        data = json.loads(BALANCE_PATH.read_text(encoding="utf-8"))
+        return float(data["balance_usd"])
+    except (json.JSONDecodeError, OSError, KeyError, ValueError, TypeError):
+        return None
+
+
+def save_balance(balance_usd: float) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    BALANCE_PATH.write_text(json.dumps({"balance_usd": balance_usd}), encoding="utf-8")
+
+
+def load_session_history() -> list[dict[str, Any]]:
+    """Reads past completed sessions (see append_session_history), most
+    recent last. Palabra doesn't expose per-session usage history the app
+    can read, so this is the only record of past sessions/spend available
+    from within the app itself."""
+    if not SESSION_HISTORY_PATH.exists():
+        return []
+    try:
+        data = json.loads(SESSION_HISTORY_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [
+        e
+        for e in data
+        if isinstance(e, dict)
+        and isinstance(e.get("started_at"), str)
+        and isinstance(e.get("duration_seconds"), (int, float))
+        and isinstance(e.get("cost_usd"), (int, float))
+    ]
+
+
+def append_session_history(started_at: str, duration_seconds: float, cost_usd: float) -> None:
+    """Appends one completed session, trimmed to the most recent
+    MAX_SESSION_HISTORY_ENTRIES."""
+    history = load_session_history()
+    history.append({"started_at": started_at, "duration_seconds": duration_seconds, "cost_usd": cost_usd})
+    history = history[-MAX_SESSION_HISTORY_ENTRIES:]
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    SESSION_HISTORY_PATH.write_text(json.dumps(history, indent=2), encoding="utf-8")
+
+
+def clear_session_history() -> None:
+    if SESSION_HISTORY_PATH.exists():
+        SESSION_HISTORY_PATH.unlink()
 
 
 _OVERLAY_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {
