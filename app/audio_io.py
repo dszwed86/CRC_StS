@@ -12,9 +12,10 @@ import queue
 import threading
 import time
 import wave
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import numpy as np
 import sounddevice as sd
@@ -29,6 +30,35 @@ BYTES_PER_MS = RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
 MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
 MAX_OUTPUT_BACKLOG_SAMPLES = int(RATE * 1.2)  # ~1.2s -- see OutputSink.play()
+STREAM_OPEN_RETRY_ATTEMPTS = 3
+STREAM_OPEN_RETRY_DELAY_SECONDS = 0.5
+
+_T = TypeVar("_T")
+
+
+def _open_with_retry(factory: Callable[[], _T]) -> _T:
+    """Retries opening a PortAudio stream a few times with a short delay on
+    sd.PortAudioError -- in particular paInternalError ([PaErrorCode -9986]),
+    which real-world logs from this app showed happening 2-3 times in a row
+    seconds apart and then resolving on its own (a user manually clicking
+    Start again worked, eventually). This is a well-known transient failure
+    on Windows WASAPI -- e.g. another app briefly holding exclusive access
+    to the same device, or the Windows audio engine mid-reinitializing a
+    device -- not something a single failed attempt should treat as fatal.
+
+    Other exception types (a bad device index, invalid parameters) are not
+    retried -- those fail identically every time, so retrying would only
+    add delay before reporting the same error.
+    """
+    last_error: sd.PortAudioError | None = None
+    for attempt in range(STREAM_OPEN_RETRY_ATTEMPTS):
+        try:
+            return factory()
+        except sd.PortAudioError as e:
+            last_error = e
+            if attempt < STREAM_OPEN_RETRY_ATTEMPTS - 1:
+                time.sleep(STREAM_OPEN_RETRY_DELAY_SECONDS)
+    raise last_error
 
 
 def probe_audio_file(path: str | Path) -> None:
@@ -228,14 +258,14 @@ class MicStream:
         self._stream = self._open_stream(device)
 
     def _open_stream(self, device: int | None) -> sd.RawInputStream:
-        return sd.RawInputStream(
+        return _open_with_retry(lambda: sd.RawInputStream(
             samplerate=RATE,
             channels=CHANNELS,
             dtype="int16",
             device=device,
             callback=self._on_audio,
             extra_settings=_wasapi_extra_settings(),
-        )
+        ))
 
     def _on_audio(self, indata, frames, time_info, status) -> None:
         data = bytes(indata)
@@ -741,14 +771,14 @@ class OutputSink:
         # caused an intermittent native crash: blocking a PortAudio callback on a
         # Python lock can collide with the stream's own stop()/close() teardown.
         self._clear_requested = threading.Event()
-        self._stream = sd.OutputStream(
+        self._stream = _open_with_retry(lambda: sd.OutputStream(
             samplerate=RATE,
             channels=CHANNELS,
             dtype="int16",
             device=device,
             callback=self._on_playback,
             extra_settings=_wasapi_extra_settings(),
-        )
+        ))
 
     def _on_playback(self, outdata, frames, time_info, status) -> None:
         if self._clear_requested.is_set():
