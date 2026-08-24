@@ -98,7 +98,7 @@ Wynik ląduje w `dist/`.
 </details>
 
 **Ustawienia zapamiętują się między uruchomieniami** — wybrany mikrofon/wyjście, głośność
-i próg czułości mikrofonu, języki, głos, "Tylko napisy", filtr i tagi w logu zapisują się do
+i próg czułości mikrofonu, stan Mute, języki, głos, "Tylko napisy", filtr logu zapisują się do
 `~/.sts_bridge/app_settings.json` przy zamknięciu aplikacji i wracają przy następnym starcie.
 Ustawienie, które wskazuje na już niepodłączone urządzenie albo nieistniejący język, jest po
 prostu pomijane (reszta wraca normalnie) zamiast powodować błąd.
@@ -106,6 +106,8 @@ prostu pomijane (reszta wraca normalnie) zamiast powodować błąd.
 Przy pierwszym uruchomieniu kliknij **Ustawienia...** i wklej klucz API Palabra —
 zostanie zapisany lokalnie w `~/.sts_bridge/.env`. W tym samym oknie:
 
+- **Język aplikacji** — Polski/English. Zmiana zapisuje się od razu, ale w pełni działa
+  dopiero po ponownym uruchomieniu aplikacji (okno dostaje o tym komunikat po zapisaniu).
 - **Testuj klucz** — realnie sprawdza połączenie z API (bez uruchamiania płatnej sesji
   tłumaczenia) i pokazuje, czy klucz działa, czy jest odrzucany.
 - **Otwórz panel Palabra (saldo, użycie)** — otwiera w przeglądarce
@@ -137,7 +139,7 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
 3. Jako urządzenie wybierz:
    - Windows: `CABLE Output (VB-Audio Virtual Cable)`
    - macOS: `BlackHole 2ch`
-4. W aplikacji, w polu **Wyjście (do OBS)**, wybierz odpowiadające urządzenie
+4. W aplikacji, w polu **Wyjście**, wybierz odpowiadające urządzenie
    *wejściowe* dla tego kabla:
    - Windows: `CABLE Input (VB-Audio Virtual Cable)`
    - macOS: `BlackHole 2ch`
@@ -155,8 +157,9 @@ z siecią) — nie trzeba ręcznie uruchamiać `Install Certificates.command` z 
    wykrywany od razu przy wyborze (czytelny komunikat), zamiast dopiero przy kliknięciu Start.
    Przycisk **✕** obok usuwa wybrany plik. Oba działania — wybór i usunięcie pliku — działają
    też **w trakcie trwającej sesji**, nie tylko przed Start; zobacz szczegóły niżej.
-3. Wybierz **Wyjście (do OBS)** — wirtualny kabel podpięty pod OBS (patrz sekcja Konfiguracja
-   OBS wyżej). Przycisk **"Testuj wyjście"** obok odtwarza krótki dźwięk testowy na wybrane
+3. Wybierz **Wyjście** — urządzenie, na które ma trafić przetłumaczone audio (np. wirtualny
+   kabel podpięty pod OBS, patrz sekcja Konfiguracja OBS wyżej, albo dowolne inne urządzenie).
+   Przycisk **"Testuj wyjście"** obok odtwarza krótki dźwięk testowy na wybrane
    urządzenie, bez uruchamiania żadnej sesji Palabra (czyli bez kosztu) — pozwala od razu
    sprawdzić, czy OBS faktycznie odbiera dźwięk z tego urządzenia, zanim zaczniesz płatną
    sesję. W trakcie trwającej sesji pasek **Poziom wyjścia** (obok pola Wyjście) pokazuje na
@@ -240,6 +243,9 @@ w Ustawieniach, żeby zobaczyć rzeczywiste zużycie).
 - **Głośność mikrofonu** — suwak 0–100%. Przy 0% mikrofon jest wyciszony (wysyła ciszę),
   ale sesja i tak trwa dalej (naliczanie po stronie Palabry nie jest wstrzymane — do tego
   służy Pauza). Przydatne do szybkiego, chwilowego wyciszenia bez przerywania sesji.
+- **Mute** — checkbox obok suwaka Głośności (skrót klawiszowy: **M**, gdy żadne pole tekstowe
+  nie jest aktywne). Wycisza mikrofon natychmiast, bez zmiany ustawionej wartości suwaka —
+  po odznaczeniu głośność wraca dokładnie tam, gdzie była.
 - **Poziom sygnału** — pasek pod suwakiem Głośności, aktywny tylko w trakcie trwającej sesji,
   pokazuje na żywo, że mikrofon faktycznie odbiera dźwięk. Pokazuje surowy poziom wejściowy
   (sprzed Głośności/Ignoruj ciszej niż), więc reaguje niezależnie od tych ustawień — przydatne
@@ -271,10 +277,8 @@ WASAPI, WDM-KS), więc aplikacja pokazuje tylko wersję WASAPI każdego urządze
 - **Pokaż w logu** — filtr (źródłowy i tłumaczenie / tylko źródłowy / tylko tłumaczenie)
   działa "na żywo": zmiana filtra od razu przefiltrowuje już wyświetlony log, a nie tylko
   kolejne wypowiedzi.
-- **Pokaż tagi języka ([pl]/[en])** — checkbox włączający/wyłączający prefiksy językowe
-  przy każdej linijce logu.
 - **Zapisz transkrypcję...** — zapisuje do pliku `.txt` dokładnie to, co aktualnie widać
-  w logu (czyli z uwzględnieniem wybranego filtra i ustawienia tagów).
+  w logu (czyli z uwzględnieniem wybranego filtra).
 - **Wyczyść transkrypcję** — jedyny sposób na wyczyszczenie logu, historii i okienka overlay.
   Kliknięcie Start/Stop **nie** czyści ich automatycznie — kolejne sesje w ramach tego samego
   uruchomienia apki doklejają się do tego, co już było, dopóki nie klikniesz tego przycisku.

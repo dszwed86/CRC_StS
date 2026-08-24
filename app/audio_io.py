@@ -21,6 +21,8 @@ import numpy as np
 import sounddevice as sd
 from palabra_ai import load_pcm
 
+from .i18n import tr
+
 RATE = 24000
 CHANNELS = 1
 CHUNK_MS = 320
@@ -80,23 +82,24 @@ def probe_audio_file(path: str | Path) -> None:
             with wave.open(str(path), "rb") as w:
                 if w.getsampwidth() != 2:
                     raise ValueError(
-                        f"{path.name}: obsługiwany jest tylko 16-bitowy WAV (plik ma {w.getsampwidth() * 8} bitów)."
+                        f"{path.name}: {tr('obsługiwany jest tylko 16-bitowy WAV (plik ma')} "
+                        f"{w.getsampwidth() * 8} {tr('bitów)')}."
                     )
                 if w.getnframes() == 0:
-                    raise ValueError(f"{path.name}: plik WAV nie zawiera dźwięku.")
+                    raise ValueError(f"{path.name}: {tr('plik WAV nie zawiera dźwięku.')}")
         except ValueError:
             raise
         except (wave.Error, OSError) as e:
-            raise ValueError(f"{path.name}: nie można otworzyć pliku ({e}).") from e
+            raise ValueError(f"{path.name}: {tr('nie można otworzyć pliku')} ({e}).") from e
         return
     try:
         import av
     except ImportError as e:
-        raise ImportError(f"Sprawdzenie {path.name} wymaga pakietu av: uv add av") from e
+        raise ImportError(f"{tr('Sprawdzenie')} {path.name} {tr('wymaga pakietu av: uv add av')}") from e
     try:
         with av.open(str(path)) as container:
             if not container.streams.audio:
-                raise ValueError(f"{path.name}: plik nie zawiera ścieżki audio.")
+                raise ValueError(f"{path.name}: {tr('plik nie zawiera ścieżki audio.')}")
     except ValueError:
         raise
     except Exception as e:
@@ -105,7 +108,7 @@ def probe_audio_file(path: str | Path) -> None:
         # deliberate boundary (this function's whole job is "translate
         # whatever's wrong with this file into one readable message"),
         # matching the existing broad except in SessionWorker.start().
-        raise ValueError(f"{path.name}: nie można otworzyć pliku ({e}).") from e
+        raise ValueError(f"{path.name}: {tr('nie można otworzyć pliku')} ({e}).") from e
 
 
 @dataclass

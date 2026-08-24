@@ -42,7 +42,8 @@ from PySide6.QtWidgets import (
 from palabra_ai import Palabra
 from palabra_ai.exc import AuthError, PalabraError
 
-from . import __version__, config
+from . import __version__, config, i18n
+from .i18n import tr
 from .audio_io import (
     FileStream,
     MicStream,
@@ -82,18 +83,18 @@ class ApiKeyTester(QObject):
         try:
             asyncio.run(asyncio.wait_for(self._check(), timeout=10))
         except TimeoutError:
-            self.finished.emit(False, "Przekroczono czas oczekiwania na odpowiedź serwera.")
+            self.finished.emit(False, tr("Przekroczono czas oczekiwania na odpowiedź serwera."))
             return
         except AuthError as e:
-            self.finished.emit(False, f"Nieprawidłowy klucz API: {e}")
+            self.finished.emit(False, f"{tr('Nieprawidłowy klucz API')}: {e}")
             return
         except PalabraError as e:
-            self.finished.emit(False, f"Błąd połączenia: {e}")
+            self.finished.emit(False, f"{tr('Błąd połączenia')}: {e}")
             return
         except Exception as e:
-            self.finished.emit(False, f"Nieoczekiwany błąd: {e}")
+            self.finished.emit(False, f"{tr('Nieoczekiwany błąd')}: {e}")
             return
-        self.finished.emit(True, "Klucz API działa poprawnie.")
+        self.finished.emit(True, tr("Klucz API działa poprawnie."))
 
     async def _check(self) -> None:
         palabra = Palabra(api_key=self._api_key, region=self._region)
@@ -104,38 +105,49 @@ class ApiKeyTester(QObject):
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Ustawienia")
+        self.setWindowTitle(tr("Ustawienia"))
         creds = config.load_credentials()
         self._test_thread: threading.Thread | None = None
         self._test_worker: ApiKeyTester | None = None
+        self._initial_language = i18n.get_language()
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("Polski", i18n.LANG_PL)
+        self.language_combo.addItem("English", i18n.LANG_EN)
+        idx = self.language_combo.findData(self._initial_language)
+        if idx >= 0:
+            self.language_combo.setCurrentIndex(idx)
 
         self.api_key_edit = QLineEdit(creds.api_key or "")
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setPlaceholderText("Klucz API z platform.palabra.ai/api-keys")
+        self.api_key_edit.setPlaceholderText(tr("Klucz API z platform.palabra.ai/api-keys"))
 
         saved_balance = config.load_balance()
         self.balance_edit = QLineEdit("" if saved_balance is None else f"{saved_balance:.2f}")
-        self.balance_edit.setPlaceholderText("np. 45.00 -- sprawdź w panelu Palabra")
+        self.balance_edit.setPlaceholderText(tr("np. 45.00 -- sprawdź w panelu Palabra"))
         self.balance_edit.setToolTip(
-            "Szacunkowe saldo w USD. Palabra nie udostępnia prawdziwego salda przez API, więc "
-            "to tylko przybliżenie liczone przez aplikację (odejmuje szacowany koszt każdej "
-            "sesji) -- może się rozjechać z rzeczywistością. Wpisz tu aktualną wartość z panelu "
-            "Palabra, żeby zsynchronizować."
+            tr(
+                "Szacunkowe saldo w USD. Palabra nie udostępnia prawdziwego salda przez API, więc "
+                "to tylko przybliżenie liczone przez aplikację (odejmuje szacowany koszt każdej "
+                "sesji) -- może się rozjechać z rzeczywistością. Wpisz tu aktualną wartość z panelu "
+                "Palabra, żeby zsynchronizować."
+            )
         )
 
         form = QFormLayout()
-        form.addRow("Klucz API Palabra:", self.api_key_edit)
-        form.addRow("Saldo Palabra (USD, orientacyjne):", self.balance_edit)
+        form.addRow(tr("Język aplikacji:"), self.language_combo)
+        form.addRow(tr("Klucz API Palabra:"), self.api_key_edit)
+        form.addRow(tr("Saldo Palabra (USD, orientacyjne):"), self.balance_edit)
 
         test_row = QHBoxLayout()
-        self.test_btn = QPushButton("Testuj klucz")
+        self.test_btn = QPushButton(tr("Testuj klucz"))
         self.test_btn.clicked.connect(self._on_test_key)
-        self.dashboard_btn = QPushButton("Otwórz panel Palabra (saldo, użycie)")
+        self.dashboard_btn = QPushButton(tr("Otwórz panel Palabra (saldo, użycie)"))
         self.dashboard_btn.clicked.connect(self._on_open_dashboard)
         test_row.addWidget(self.test_btn)
         test_row.addWidget(self.dashboard_btn)
 
-        self.history_btn = QPushButton("Historia sesji...")
+        self.history_btn = QPushButton(tr("Historia sesji..."))
         self.history_btn.clicked.connect(self._on_open_history)
 
         self.test_result_label = QLabel("")
@@ -145,7 +157,7 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
 
-        version_label = QLabel(f"wersja {__version__}")
+        version_label = QLabel(f"{tr('wersja')} {__version__} — CRC Poland")
         version_label.setStyleSheet("color: gray; font-size: 9pt;")
         version_label.setAlignment(Qt.AlignmentFlag.AlignRight)
 
@@ -160,7 +172,7 @@ class SettingsDialog(QDialog):
     def _on_save(self) -> None:
         api_key = self.api_key_edit.text().strip()
         if not api_key:
-            QMessageBox.warning(self, "Brak klucza", "Podaj klucz API przed zapisaniem.")
+            QMessageBox.warning(self, tr("Brak klucza"), tr("Podaj klucz API przed zapisaniem."))
             return
         config.save_credentials(api_key, REGION)
         balance_text = self.balance_edit.text().strip()
@@ -168,8 +180,19 @@ class SettingsDialog(QDialog):
             try:
                 config.save_balance(float(balance_text.replace(",", ".")))
             except ValueError:
-                QMessageBox.warning(self, "Nieprawidłowe saldo", "Saldo musi być liczbą, np. 45.00.")
+                QMessageBox.warning(self, tr("Nieprawidłowe saldo"), tr("Saldo musi być liczbą, np. 45.00."))
                 return
+        new_language = self.language_combo.currentData()
+        if new_language != self._initial_language:
+            settings = config.load_app_settings()
+            settings["language"] = new_language
+            config.save_app_settings(settings)
+            i18n.set_language(new_language)
+            QMessageBox.information(
+                self,
+                tr("Zmieniono język"),
+                tr("Zmiana języka aplikacji będzie widoczna po ponownym uruchomieniu."),
+            )
         self.accept()
 
     def _on_open_history(self) -> None:
@@ -181,12 +204,12 @@ class SettingsDialog(QDialog):
     def _on_test_key(self) -> None:
         api_key = self.api_key_edit.text().strip()
         if not api_key:
-            QMessageBox.warning(self, "Brak klucza", "Wpisz klucz API przed testem.")
+            QMessageBox.warning(self, tr("Brak klucza"), tr("Wpisz klucz API przed testem."))
             return
 
         self.test_btn.setEnabled(False)
         self.test_result_label.setStyleSheet("")
-        self.test_result_label.setText("Testowanie...")
+        self.test_result_label.setText(tr("Testowanie..."))
 
         worker = ApiKeyTester(api_key, REGION)
         worker.finished.connect(self._on_test_finished, Qt.ConnectionType.QueuedConnection)
@@ -225,15 +248,15 @@ class SessionHistoryDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Historia sesji")
+        self.setWindowTitle(tr("Historia sesji"))
         self.resize(450, 350)
 
         self.list_widget = QListWidget()
         self.total_label = QLabel("")
 
-        self.clear_btn = QPushButton("Wyczyść historię")
+        self.clear_btn = QPushButton(tr("Wyczyść historię"))
         self.clear_btn.clicked.connect(self._on_clear)
-        close_btn = QPushButton("Zamknij")
+        close_btn = QPushButton(tr("Zamknij"))
         close_btn.clicked.connect(self.close)
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.clear_btn)
@@ -258,11 +281,11 @@ class SessionHistoryDialog(QDialog):
             minutes, seconds = divmod(int(entry["duration_seconds"]), 60)
             self.list_widget.addItem(f"{started} — {minutes:02d}:{seconds:02d} — ~${entry['cost_usd']:.2f}")
         total_cost = sum(e["cost_usd"] for e in history)
-        self.total_label.setText(f"Razem: ~${total_cost:.2f} ({len(history)} sesji)")
+        self.total_label.setText(f"{tr('Razem')}: ~${total_cost:.2f} ({len(history)} {tr('sesji')})")
 
     def _on_clear(self) -> None:
         answer = QMessageBox.question(
-            self, "Wyczyścić historię?", "Usunąć całą zapisaną historię sesji? Tego nie można cofnąć."
+            self, tr("Wyczyścić historię?"), tr("Usunąć całą zapisaną historię sesji? Tego nie można cofnąć.")
         )
         if answer == QMessageBox.StandardButton.Yes:
             config.clear_session_history()
@@ -281,32 +304,34 @@ class SavedVoicesDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Zapisane głosy")
+        self.setWindowTitle(tr("Zapisane głosy"))
         self._voices = config.load_saved_voices()
 
         self.list_widget = QListWidget()
         self._refresh_list()
 
         hint = QLabel(
-            "ID głosu skopiuj z portalu app.palabra.ai/voices (zakładka biblioteki głosów"
-            " lub klonowanie)."
+            tr(
+                "ID głosu skopiuj z portalu app.palabra.ai/voices (zakładka biblioteki głosów"
+                " lub klonowanie)."
+            )
         )
         hint.setWordWrap(True)
 
         add_row = QHBoxLayout()
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("Nazwa (np. Lektor)")
+        self.name_edit.setPlaceholderText(tr("Nazwa (np. Lektor)"))
         self.id_edit = QLineEdit()
-        self.id_edit.setPlaceholderText("ID głosu z app.palabra.ai/voices")
+        self.id_edit.setPlaceholderText(tr("ID głosu z app.palabra.ai/voices"))
         add_row.addWidget(self.name_edit)
         add_row.addWidget(self.id_edit)
 
         btn_row = QHBoxLayout()
-        add_btn = QPushButton("Dodaj")
+        add_btn = QPushButton(tr("Dodaj"))
         add_btn.clicked.connect(self._on_add)
-        remove_btn = QPushButton("Usuń zaznaczony")
+        remove_btn = QPushButton(tr("Usuń zaznaczony"))
         remove_btn.clicked.connect(self._on_remove)
-        close_btn = QPushButton("Zamknij")
+        close_btn = QPushButton(tr("Zamknij"))
         close_btn.clicked.connect(self.close)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(remove_btn)
@@ -328,7 +353,7 @@ class SavedVoicesDialog(QDialog):
         name = self.name_edit.text().strip()
         voice_id = self.id_edit.text().strip()
         if not name or not voice_id:
-            QMessageBox.warning(self, "Brak danych", "Podaj nazwę i ID głosu.")
+            QMessageBox.warning(self, tr("Brak danych"), tr("Podaj nazwę i ID głosu."))
             return
         self._voices.append({"name": name, "voice_id": voice_id})
         config.save_saved_voices(self._voices)
@@ -469,7 +494,7 @@ class SessionWorker(QObject):
                 )
                 self._loop.run_until_complete(self._runner.run())
         except Exception as e:  # device open failure etc. — before/outside TranslationRunner's own handling
-            self.error_occurred.emit(f"Błąd urządzenia audio: {e}")
+            self.error_occurred.emit(f"{tr('Błąd urządzenia audio')}: {e}")
             self.state_changed.emit(SessionState.ERROR)
         finally:
             # On Windows, asyncio's default ProactorEventLoop can crash the
@@ -625,7 +650,13 @@ class UpdateChecker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CRC Translator")
+        # Must run before any tr()-wrapped widget text below is built: tr()
+        # reads the language set here, and (see i18n.py) this app has no
+        # QTranslator/retranslateUi wiring to re-apply it to already-built
+        # widgets later -- a language switch in Settings only takes effect
+        # on the next launch, which is exactly this code path again.
+        i18n.set_language(config.load_app_settings().get("language", i18n.LANG_PL))
+        self.setWindowTitle(tr("CRC Translator"))
         self._thread: threading.Thread | None = None
         self._worker: SessionWorker | None = None
         self._selected_file: str | None = None
@@ -654,12 +685,12 @@ class MainWindow(QMainWindow):
         self._update_url: str | None = None
         settings_row.addWidget(self.update_btn)
         settings_row.addStretch()
-        self.settings_btn = QPushButton("Ustawienia...")
+        self.settings_btn = QPushButton(tr("Ustawienia..."))
         self.settings_btn.clicked.connect(self._open_settings)
         settings_row.addWidget(self.settings_btn)
         root.addLayout(settings_row)
 
-        source_group = QGroupBox("Źródło dźwięku")
+        source_group = QGroupBox(tr("Źródło dźwięku"))
         form = QFormLayout(source_group)
 
         self.mic_combo = QComboBox()
@@ -673,7 +704,7 @@ class MainWindow(QMainWindow):
         mic_gain_outer.setContentsMargins(0, 0, 0, 0)
 
         gain_row = QHBoxLayout()
-        gain_row.addWidget(QLabel("Głośność mikrofonu:"))
+        gain_row.addWidget(QLabel(tr("Głośność mikrofonu:")))
         self.mic_gain_slider = QSlider(Qt.Orientation.Horizontal)
         self.mic_gain_slider.setRange(0, 100)
         self.mic_gain_slider.setValue(100)
@@ -681,26 +712,32 @@ class MainWindow(QMainWindow):
         self.mic_gain_label = QLabel("100%")
         gain_row.addWidget(self.mic_gain_slider, stretch=1)
         gain_row.addWidget(self.mic_gain_label)
+        self.mic_mute_check = QCheckBox("Mute")
+        self.mic_mute_check.setToolTip(tr("Wycisza mikrofon bez zmiany ustawionej głośności (skrót: M)."))
+        self.mic_mute_check.toggled.connect(self._on_mic_mute_toggled)
+        gain_row.addWidget(self.mic_mute_check)
         mic_gain_outer.addLayout(gain_row)
 
         level_row = QHBoxLayout()
-        level_row.addWidget(QLabel("Poziom sygnału:"))
+        level_row.addWidget(QLabel(tr("Poziom sygnału:")))
         self.mic_level_bar = QProgressBar()
         self.mic_level_bar.setRange(0, 100)
         self.mic_level_bar.setValue(0)
         self.mic_level_bar.setTextVisible(False)
         self.mic_level_bar.setFixedHeight(10)
         self.mic_level_bar.setToolTip(
-            "Poziom dźwięku odbieranego z mikrofonu na żywo, w trakcie trwającej sesji -- "
-            "potwierdza, że mikrofon faktycznie łapie dźwięk, niezależnie od Głośności mikrofonu."
+            tr(
+                "Poziom dźwięku odbieranego z mikrofonu na żywo, w trakcie trwającej sesji -- "
+                "potwierdza, że mikrofon faktycznie łapie dźwięk, niezależnie od Głośności mikrofonu."
+            )
         )
         self.mic_level_bar.setStyleSheet("QProgressBar::chunk { background-color: #4caf50; }")
         level_row.addWidget(self.mic_level_bar, stretch=1)
         mic_gain_outer.addLayout(level_row)
 
         gate_row = QHBoxLayout()
-        gate_label_text = QLabel("Ignoruj ciszej niż:")
-        gate_tooltip = (
+        gate_label_text = QLabel(tr("Ignoruj ciszej niż:"))
+        gate_tooltip = tr(
             "Dźwięk cichszy niż ten poziom jest całkowicie pomijany (zamieniany na ciszę) "
             "zanim trafi do tłumaczenia — Twoja mowa musi być głośniejsza niż ustawiony próg, "
             "żeby się liczyła.\n\n"
@@ -718,7 +755,7 @@ class MainWindow(QMainWindow):
         self.mic_gate_slider.setValue(0)
         self.mic_gate_slider.setToolTip(gate_tooltip)
         self.mic_gate_slider.valueChanged.connect(self._on_mic_gate_changed)
-        self.mic_gate_label = QLabel("Wyłączony")
+        self.mic_gate_label = QLabel(tr("Wyłączony"))
         gate_row.addWidget(self.mic_gate_slider, stretch=1)
         gate_row.addWidget(self.mic_gate_label)
         mic_gain_outer.addLayout(gate_row)
@@ -726,11 +763,11 @@ class MainWindow(QMainWindow):
         self.file_row = QWidget()
         file_layout = QHBoxLayout(self.file_row)
         file_layout.setContentsMargins(0, 0, 0, 0)
-        self.file_label = QLabel("(nie wybrano pliku)")
-        self.file_btn = QPushButton("Wybierz plik...")
+        self.file_label = QLabel(tr("(nie wybrano pliku)"))
+        self.file_btn = QPushButton(tr("Wybierz plik..."))
         self.file_btn.clicked.connect(self._choose_file)
         self.file_clear_btn = QPushButton("✕")
-        self.file_clear_btn.setToolTip("Usuń wybrany plik")
+        self.file_clear_btn.setToolTip(tr("Usuń wybrany plik"))
         self.file_clear_btn.setEnabled(False)
         self.file_clear_btn.clicked.connect(self._on_clear_file)
         file_layout.addWidget(self.file_label, stretch=1)
@@ -740,8 +777,10 @@ class MainWindow(QMainWindow):
         self.file_playback_row = QWidget()
         file_playback_layout = QHBoxLayout(self.file_playback_row)
         file_playback_layout.setContentsMargins(0, 0, 0, 0)
-        self.file_pause_btn = QPushButton("Pauza pliku")
-        self.file_pause_btn.setToolTip("Wstrzymuje/wznawia tylko plik -- mikrofon i reszta sesji nie są tym dotknięte.")
+        self.file_pause_btn = QPushButton(tr("Pauza pliku"))
+        self.file_pause_btn.setToolTip(
+            tr("Wstrzymuje/wznawia tylko plik -- mikrofon i reszta sesji nie są tym dotknięte.")
+        )
         self.file_pause_btn.setVisible(False)
         self.file_pause_btn.setEnabled(False)
         self.file_pause_btn.clicked.connect(self._on_file_pause_resume)
@@ -762,15 +801,15 @@ class MainWindow(QMainWindow):
         # needed at all (contrast with the old _on_mode_changed).
         mic_row = QHBoxLayout()
         mic_row.addWidget(self.mic_combo, stretch=1)
-        self.refresh_devices_btn = QPushButton("Odśwież urządzenia")
+        self.refresh_devices_btn = QPushButton(tr("Odśwież urządzenia"))
         self.refresh_devices_btn.clicked.connect(self._on_refresh_devices)
         mic_row.addWidget(self.refresh_devices_btn)
-        form.addRow("Mikrofon:", mic_row)
+        form.addRow(tr("Mikrofon:"), mic_row)
         form.addRow("", self.mic_gain_row)
-        form.addRow("Plik (opcjonalnie):", self.file_row)
+        form.addRow(tr("Plik (opcjonalnie):"), self.file_row)
         form.addRow("", self.file_playback_row)
 
-        output_group = QGroupBox("Tłumaczenie")
+        output_group = QGroupBox(tr("Tłumaczenie"))
         form = QFormLayout(output_group)
 
         self.output_combo = QComboBox()
@@ -779,8 +818,10 @@ class MainWindow(QMainWindow):
         for d in self._output_devices:
             self.output_combo.addItem(d.name, d.index)
         self.output_hint = QLabel(
-            "Nie wykryto wirtualnego kabla audio (VB-Cable / BlackHole)."
-            " Zainstaluj go, aby OBS mógł odebrać tłumaczenie — patrz README."
+            tr(
+                "Nie wykryto wirtualnego kabla audio (VB-Cable / BlackHole)."
+                " Zainstaluj go, aby OBS mógł odebrać tłumaczenie — patrz README."
+            )
         )
         self.output_hint.setStyleSheet("color: #b06a00;")
         if cable is not None:
@@ -789,37 +830,43 @@ class MainWindow(QMainWindow):
 
         output_row = QHBoxLayout()
         output_row.addWidget(self.output_combo, stretch=1)
-        self.test_output_btn = QPushButton("Testuj wyjście")
+        self.test_output_btn = QPushButton(tr("Testuj wyjście"))
         self.test_output_btn.setToolTip(
-            "Odtwarza krótki dźwięk testowy na wybrane urządzenie wyjściowe -- "
-            "bez uruchamiania sesji Palabra, więc bez kosztu -- przydatne do sprawdzenia, "
-            "czy OBS faktycznie odbiera dźwięk z tego urządzenia."
+            tr(
+                "Odtwarza krótki dźwięk testowy na wybrane urządzenie wyjściowe -- "
+                "bez uruchamiania sesji Palabra, więc bez kosztu -- przydatne do sprawdzenia, "
+                "czy dźwięk faktycznie dociera do tego urządzenia."
+            )
         )
         self.test_output_btn.clicked.connect(self._on_test_output)
         output_row.addWidget(self.test_output_btn)
-        form.addRow("Wyjście (do OBS):", output_row)
+        form.addRow(tr("Wyjście:"), output_row)
 
         output_level_row = QHBoxLayout()
-        output_level_row.addWidget(QLabel("Poziom wyjścia:"))
+        output_level_row.addWidget(QLabel(tr("Poziom wyjścia:")))
         self.output_level_bar = QProgressBar()
         self.output_level_bar.setRange(0, 100)
         self.output_level_bar.setValue(0)
         self.output_level_bar.setTextVisible(False)
         self.output_level_bar.setFixedHeight(10)
         self.output_level_bar.setToolTip(
-            "Poziom dźwięku faktycznie odtwarzanego na wybrane wyjście, na żywo, w trakcie "
-            "trwającej sesji -- potwierdza, że przetłumaczone audio realnie dociera do "
-            "urządzenia (np. wirtualnego kabla), a nie tylko że zostało odebrane."
+            tr(
+                "Poziom dźwięku faktycznie odtwarzanego na wybrane wyjście, na żywo, w trakcie "
+                "trwającej sesji -- potwierdza, że przetłumaczone audio realnie dociera do "
+                "urządzenia (np. wirtualnego kabla), a nie tylko że zostało odebrane."
+            )
         )
         self.output_level_bar.setStyleSheet("QProgressBar::chunk { background-color: #2196f3; }")
         output_level_row.addWidget(self.output_level_bar, stretch=1)
         form.addRow("", output_level_row)
 
-        self.subtitles_only_check = QCheckBox("Tylko napisy (bez dźwięku)")
+        self.subtitles_only_check = QCheckBox(tr("Tylko napisy (bez dźwięku)"))
         self.subtitles_only_check.setToolTip(
-            "Odebrane przetłumaczone audio nie jest odtwarzane na wybrane wyjście -- zostaje "
-            "tylko tekst (log/overlay). Palabra API nie oferuje trybu bez syntezy mowy, więc "
-            "koszt sesji się nie zmienia -- to tylko wycisza odtwarzanie po stronie aplikacji."
+            tr(
+                "Odebrane przetłumaczone audio nie jest odtwarzane na wybrane wyjście -- zostaje "
+                "tylko tekst (log/overlay). Palabra API nie oferuje trybu bez syntezy mowy, więc "
+                "koszt sesji się nie zmienia -- to tylko wycisza odtwarzanie po stronie aplikacji."
+            )
         )
         form.addRow("", self.subtitles_only_check)
         self.subtitles_only_check.toggled.connect(self._on_subtitles_only_toggled)
@@ -828,37 +875,37 @@ class MainWindow(QMainWindow):
         for code, name in SOURCE_LANGUAGES:
             self.source_lang_combo.addItem(f"{name} ({code})", code)
         self.source_lang_combo.setCurrentIndex([c for c, _ in SOURCE_LANGUAGES].index(DEFAULT_SOURCE))
-        form.addRow("Język źródłowy:", self.source_lang_combo)
+        form.addRow(tr("Język źródłowy:"), self.source_lang_combo)
 
         self.target_lang_combo = QComboBox()
         for code, name in TARGET_LANGUAGES:
             self.target_lang_combo.addItem(f"{name} ({code})", code)
         self.target_lang_combo.setCurrentIndex([c for c, _ in TARGET_LANGUAGES].index(DEFAULT_TARGET))
-        form.addRow("Język docelowy:", self.target_lang_combo)
+        form.addRow(tr("Język docelowy:"), self.target_lang_combo)
 
         self.voice_combo = QComboBox()
         self.voice_combo.currentIndexChanged.connect(self._on_voice_mode_changed)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_selection_changed)
         self.voice_custom_edit = QLineEdit()
-        self.voice_custom_edit.setPlaceholderText("ID głosu z app.palabra.ai/voices")
+        self.voice_custom_edit.setPlaceholderText(tr("ID głosu z app.palabra.ai/voices"))
         self.voice_custom_edit.setVisible(False)
         self.voice_custom_edit.editingFinished.connect(self._on_voice_custom_edit_finished)
-        self.manage_voices_btn = QPushButton("Zapisane głosy...")
+        self.manage_voices_btn = QPushButton(tr("Zapisane głosy..."))
         self.manage_voices_btn.clicked.connect(self._on_manage_voices)
         self._rebuild_voice_combo()
         voice_row = QHBoxLayout()
         voice_row.addWidget(self.voice_combo, stretch=1)
         voice_row.addWidget(self.voice_custom_edit, stretch=1)
         voice_row.addWidget(self.manage_voices_btn)
-        form.addRow("Głos:", voice_row)
+        form.addRow(tr("Głos:"), voice_row)
 
         root.addWidget(source_group)
         root.addWidget(output_group)
         root.addWidget(self.output_hint)
 
-        self.pause_btn = QPushButton("Pauza")
+        self.pause_btn = QPushButton(tr("Pauza"))
         self.pause_btn.setToolTip(
-            "Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku. (F6)"
+            tr("Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku. (F6)")
         )
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._on_pause_resume)
@@ -876,9 +923,9 @@ class MainWindow(QMainWindow):
 
         self._is_paused = False
         self._file_paused = False
+        self._mic_muted = False
         self._pause_request_pending = False
         self._partial_line_active = False  # last log line is a growing, not-yet-final transcript
-        self._show_lang_tags = True
         # Billable session time (see _on_state): accumulates only while the
         # server-side session is actually RUNNING, not during Pauza -- matches
         # what Palabra is actually charging for, per the "Pauza also stops
@@ -889,9 +936,9 @@ class MainWindow(QMainWindow):
         self._balance_usd: float | None = config.load_balance()
 
         control_row = QHBoxLayout()
-        self.status_label = QLabel("Gotowy")
+        self.status_label = QLabel(tr("Gotowy"))
         self.session_time_label = QLabel("")
-        self.start_stop_btn = QPushButton("Start")
+        self.start_stop_btn = QPushButton(tr("Start"))
         self.start_stop_btn.clicked.connect(self._on_start_stop)
         control_row.addWidget(self.status_label, stretch=1)
         control_row.addWidget(self.session_time_label)
@@ -908,36 +955,32 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("F6"), self, activated=self._on_pause_resume)
 
         log_filter_row = QHBoxLayout()
-        log_filter_row.addWidget(QLabel("Pokaż w logu:"))
+        log_filter_row.addWidget(QLabel(tr("Pokaż w logu:")))
         self.log_filter_combo = QComboBox()
-        self.log_filter_combo.addItem("Źródłowy i tłumaczenie", "both")
-        self.log_filter_combo.addItem("Tylko źródłowy", "source")
-        self.log_filter_combo.addItem("Tylko tłumaczenie", "translation")
+        self.log_filter_combo.addItem(tr("Źródłowy i tłumaczenie"), "both")
+        self.log_filter_combo.addItem(tr("Tylko źródłowy"), "source")
+        self.log_filter_combo.addItem(tr("Tylko tłumaczenie"), "translation")
         self.log_filter_combo.currentIndexChanged.connect(self._rebuild_log)
         log_filter_row.addWidget(self.log_filter_combo)
-        self.show_tags_check = QCheckBox("Pokaż tagi języka ([pl]/[en])")
-        self.show_tags_check.setChecked(True)
-        self.show_tags_check.toggled.connect(self._on_show_tags_toggled)
-        log_filter_row.addWidget(self.show_tags_check)
         log_filter_row.addStretch()
         root.addLayout(log_filter_row)
 
         overlay_row = QHBoxLayout()
         overlay_row.addStretch()
-        self.overlay_btn = QPushButton("Odczep okienko z tłumaczeniem")
+        self.overlay_btn = QPushButton(tr("Odczep okienko z tłumaczeniem"))
         self.overlay_btn.clicked.connect(self._on_toggle_overlay)
         overlay_row.addWidget(self.overlay_btn)
-        self.overlay_settings_btn = QPushButton("Ustawienia wyglądu overlay...")
+        self.overlay_settings_btn = QPushButton(tr("Ustawienia wyglądu overlay..."))
         self.overlay_settings_btn.clicked.connect(self._on_open_overlay_settings)
         overlay_row.addWidget(self.overlay_settings_btn)
-        self.save_transcript_btn = QPushButton("Zapisz transkrypcję...")
+        self.save_transcript_btn = QPushButton(tr("Zapisz transkrypcję..."))
         self.save_transcript_btn.clicked.connect(self._on_save_transcript)
         overlay_row.addWidget(self.save_transcript_btn)
-        self.clear_transcript_btn = QPushButton("Wyczyść transkrypcję")
+        self.clear_transcript_btn = QPushButton(tr("Wyczyść transkrypcję"))
         self.clear_transcript_btn.clicked.connect(self._on_clear_transcript)
         overlay_row.addWidget(self.clear_transcript_btn)
-        self.open_error_log_btn = QPushButton("Otwórz log błędów")
-        self.open_error_log_btn.setToolTip("Otwiera ~/.sts_bridge/errors.log w domyślnym edytorze tekstu.")
+        self.open_error_log_btn = QPushButton(tr("Otwórz log błędów"))
+        self.open_error_log_btn.setToolTip(tr("Otwiera ~/.sts_bridge/errors.log w domyślnym edytorze tekstu."))
         self.open_error_log_btn.clicked.connect(self._on_open_error_log)
         overlay_row.addWidget(self.open_error_log_btn)
         root.addLayout(overlay_row)
@@ -988,7 +1031,7 @@ class MainWindow(QMainWindow):
 
     def _on_update_found(self, version: str, url: str) -> None:
         self._update_url = url
-        self.update_btn.setText(f"Dostępna nowa wersja v{version} -- kliknij, aby otworzyć")
+        self.update_btn.setText(f"{tr('Dostępna nowa wersja')} v{version} -- {tr('kliknij, aby otworzyć')}")
         self.update_btn.setVisible(True)
 
     def _on_open_update_url(self) -> None:
@@ -1014,6 +1057,8 @@ class MainWindow(QMainWindow):
                 self.output_combo.setCurrentIndex(idx)
         if "mic_gain" in settings:
             self.mic_gain_slider.setValue(int(settings["mic_gain"]))
+        if "mic_muted" in settings:
+            self.mic_mute_check.setChecked(bool(settings["mic_muted"]))
         if "mic_gate" in settings:
             self.mic_gate_slider.setValue(int(settings["mic_gate"]))
         if "subtitles_only" in settings:
@@ -1045,8 +1090,6 @@ class MainWindow(QMainWindow):
             idx = self.log_filter_combo.findData(log_filter)
             if idx >= 0:
                 self.log_filter_combo.setCurrentIndex(idx)
-        if "show_lang_tags" in settings:
-            self.show_tags_check.setChecked(bool(settings["show_lang_tags"]))
 
     def _save_app_settings(self) -> None:
         voice_kind, voice_id = self.voice_combo.currentData() if self.voice_combo.count() else ("auto", None)
@@ -1054,6 +1097,7 @@ class MainWindow(QMainWindow):
             "mic_device_name": self.mic_combo.currentText(),
             "output_device_name": self.output_combo.currentText(),
             "mic_gain": self.mic_gain_slider.value(),
+            "mic_muted": self.mic_mute_check.isChecked(),
             "mic_gate": self.mic_gate_slider.value(),
             "subtitles_only": self.subtitles_only_check.isChecked(),
             "source_lang": self.source_lang_combo.currentData(),
@@ -1062,7 +1106,7 @@ class MainWindow(QMainWindow):
             "voice_id": voice_id,
             "voice_custom_text": self.voice_custom_edit.text(),
             "log_filter": self.log_filter_combo.currentData(),
-            "show_lang_tags": self.show_tags_check.isChecked(),
+            "language": i18n.get_language(),
         })
 
     def _set_config_enabled(self, enabled: bool) -> None:
@@ -1116,13 +1160,13 @@ class MainWindow(QMainWindow):
         current = self.voice_combo.currentData() if self.voice_combo.count() else None
         self.voice_combo.blockSignals(True)
         self.voice_combo.clear()
-        self.voice_combo.addItem("Domyślny (auto)", ("auto", None))
+        self.voice_combo.addItem(tr("Domyślny (auto)"), ("auto", None))
         self.voice_combo.addItem("default_low", ("id", "default_low"))
         self.voice_combo.addItem("default_high", ("id", "default_high"))
-        self.voice_combo.addItem("Klonowanie głosu mówcy (eksperymentalne)", ("clone", None))
+        self.voice_combo.addItem(tr("Klonowanie głosu mówcy (eksperymentalne)"), ("clone", None))
         for v in config.load_saved_voices():
             self.voice_combo.addItem(v["name"], ("id", v["voice_id"]))
-        self.voice_combo.addItem("Inny (ID z portalu Palabra)...", ("custom", None))
+        self.voice_combo.addItem(tr("Inny (ID z portalu Palabra)..."), ("custom", None))
         if current is not None:
             # Not findData(): unreliably fails to match a tuple containing
             # None (e.g. ("clone", None), ("custom", None)) through Qt's
@@ -1155,16 +1199,17 @@ class MainWindow(QMainWindow):
     def _choose_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Wybierz plik audio/wideo",
+            tr("Wybierz plik audio/wideo"),
             "",
-            "Audio/Video (*.wav *.mp3 *.mp4 *.mov *.m4a *.flac *.ogg *.mkv *.avi *.webm *.wmv *.flv *.aac *.ts);;Wszystkie pliki (*)",
+            f"{tr('Audio/Video')} (*.wav *.mp3 *.mp4 *.mov *.m4a *.flac *.ogg *.mkv *.avi *.webm *.wmv *.flv *.aac *.ts)"
+            f";;{tr('Wszystkie pliki')} (*)",
         )
         if not path:
             return
         try:
             probe_audio_file(path)
         except (ValueError, ImportError) as e:
-            QMessageBox.warning(self, "Nieprawidłowy plik", str(e))
+            QMessageBox.warning(self, tr("Nieprawidłowy plik"), str(e))
             return
         self._selected_file = path
         self.file_label.setText(path)
@@ -1178,7 +1223,7 @@ class MainWindow(QMainWindow):
             # TranslationRunner._do_set_file, which pauses it before it's
             # ever handed to MixedSource.
             self._file_paused = True
-            self.file_pause_btn.setText("Wznów plik")
+            self.file_pause_btn.setText(tr("Wznów plik"))
             self.file_pause_btn.setEnabled(True)
             self.position_slider.setEnabled(False)
             self._position_timer.start()
@@ -1186,7 +1231,7 @@ class MainWindow(QMainWindow):
 
     def _on_clear_file(self) -> None:
         self._selected_file = None
-        self.file_label.setText("(nie wybrano pliku)")
+        self.file_label.setText(tr("(nie wybrano pliku)"))
         self.file_clear_btn.setEnabled(False)
         self.position_slider.setVisible(False)
         self.position_label.setVisible(False)
@@ -1196,7 +1241,7 @@ class MainWindow(QMainWindow):
         self.file_pause_btn.setVisible(False)
         self.file_pause_btn.setEnabled(False)
         self._file_paused = False
-        self.file_pause_btn.setText("Pauza pliku")
+        self.file_pause_btn.setText(tr("Pauza pliku"))
         if self._worker is not None:
             self._worker.set_file(None)
 
@@ -1232,33 +1277,40 @@ class MainWindow(QMainWindow):
 
     def _on_mic_gain_changed(self, value: int) -> None:
         self.mic_gain_label.setText(f"{value}%")
-        if self._worker is not None:
+        if self._worker is not None and not self._mic_muted:
             self._worker.set_mic_gain(value / 100)
 
+    def _on_mic_mute_toggled(self, checked: bool) -> None:
+        self._mic_muted = checked
+        if self._worker is not None:
+            self._worker.set_mic_gain(0.0 if checked else self.mic_gain_slider.value() / 100)
+
     def _on_mic_gate_changed(self, value: int) -> None:
-        self.mic_gate_label.setText("Wyłączony" if value == 0 else f"{value}%")
+        self.mic_gate_label.setText(tr("Wyłączony") if value == 0 else f"{value}%")
         if self._worker is not None:
             self._worker.set_gate_threshold(value / 100)
 
     def _on_test_output(self) -> None:
         if self.output_combo.count() == 0:
-            QMessageBox.warning(self, "Brak urządzenia wyjściowego", "System nie zgłasza żadnego urządzenia audio wyjściowego.")
+            QMessageBox.warning(
+                self, tr("Brak urządzenia wyjściowego"), tr("System nie zgłasza żadnego urządzenia audio wyjściowego.")
+            )
             return
         try:
             play_test_tone(self.output_combo.currentData())
         except Exception as e:
-            QMessageBox.warning(self, "Błąd testu wyjścia", f"Nie udało się odtworzyć dźwięku testowego: {e}")
+            QMessageBox.warning(self, tr("Błąd testu wyjścia"), f"{tr('Nie udało się odtworzyć dźwięku testowego')}: {e}")
 
     def _on_start_stop(self) -> None:
         if self._worker is not None:
             self.start_stop_btn.setEnabled(False)
-            self.status_label.setText("Zatrzymywanie...")
+            self.status_label.setText(tr("Zatrzymywanie..."))
             self._worker.stop()
             return
 
         creds = config.load_credentials()
         if not creds.api_key:
-            QMessageBox.warning(self, "Brak klucza API", "Ustaw klucz API w Ustawieniach przed rozpoczęciem.")
+            QMessageBox.warning(self, tr("Brak klucza API"), tr("Ustaw klucz API w Ustawieniach przed rozpoczęciem."))
             self._open_settings()
             return
 
@@ -1266,10 +1318,12 @@ class MainWindow(QMainWindow):
         needs_file = self._selected_file is not None
         file_path = self._selected_file if needs_file else None
         if needs_file and not file_path:
-            QMessageBox.warning(self, "Brak pliku", "Wybierz plik audio/wideo do przetłumaczenia.")
+            QMessageBox.warning(self, tr("Brak pliku"), tr("Wybierz plik audio/wideo do przetłumaczenia."))
             return
         if self.output_combo.count() == 0:
-            QMessageBox.critical(self, "Brak urządzenia wyjściowego", "System nie zgłasza żadnego urządzenia audio wyjściowego.")
+            QMessageBox.critical(
+                self, tr("Brak urządzenia wyjściowego"), tr("System nie zgłasza żadnego urządzenia audio wyjściowego.")
+            )
             return
 
         mic_device = self.mic_combo.currentData() if mic_active else None
@@ -1279,7 +1333,9 @@ class MainWindow(QMainWindow):
 
         resolved_voice = self._resolve_selected_voice()
         if resolved_voice is None:
-            QMessageBox.warning(self, "Brak ID głosu", "Podaj ID głosu (z app.palabra.ai/voices) albo wybierz inną opcję.")
+            QMessageBox.warning(
+                self, tr("Brak ID głosu"), tr("Podaj ID głosu (z app.palabra.ai/voices) albo wybierz inną opcję.")
+            )
             return
         voice_id, voice_cloning = resolved_voice
 
@@ -1300,7 +1356,7 @@ class MainWindow(QMainWindow):
             mic_device=mic_device,
             output_device=output_device,
             file_path=file_path,
-            mic_gain=self.mic_gain_slider.value() / 100,
+            mic_gain=0.0 if self._mic_muted else self.mic_gain_slider.value() / 100,
             mic_gate_threshold=self.mic_gate_slider.value() / 100,
             voice_id=voice_id,
             voice_cloning=voice_cloning,
@@ -1323,7 +1379,7 @@ class MainWindow(QMainWindow):
         self._worker = worker
         self._thread = thread
         thread.start()
-        self.start_stop_btn.setText("Stop")
+        self.start_stop_btn.setText(tr("Stop"))
         self._set_config_enabled(False)
         self._session_billable_seconds = 0.0
         self._session_running_since = None
@@ -1332,7 +1388,7 @@ class MainWindow(QMainWindow):
         self._level_timer.start()
         if self._selected_file is not None:
             self._file_paused = True
-            self.file_pause_btn.setText("Wznów plik")
+            self.file_pause_btn.setText(tr("Wznów plik"))
             self.file_pause_btn.setEnabled(True)
             self._position_timer.start()
         else:
@@ -1345,7 +1401,7 @@ class MainWindow(QMainWindow):
 
     def _on_state(self, state: SessionState) -> None:
         self._pause_request_pending = False
-        self.status_label.setText(_STATE_LABELS.get(state, str(state)))
+        self.status_label.setText(tr(_STATE_LABELS.get(state, str(state))))
         if state == SessionState.RUNNING:
             if self._session_running_since is None:
                 self._session_running_since = time.monotonic()
@@ -1357,10 +1413,10 @@ class MainWindow(QMainWindow):
             self._session_running_since = None
         if state == SessionState.PAUSED:
             self._is_paused = True
-            self.pause_btn.setText("Wznów")
+            self.pause_btn.setText(tr("Wznów"))
         elif state == SessionState.RUNNING:
             self._is_paused = False
-            self.pause_btn.setText("Pauza")
+            self.pause_btn.setText(tr("Pauza"))
             self.pause_btn.setEnabled(True)
         elif state == SessionState.RECONNECTING:
             # Nothing to pause/resume mid-reconnect -- request_pause() would
@@ -1389,7 +1445,7 @@ class MainWindow(QMainWindow):
         self._update_session_display()  # freeze the main-window label at its final total, not mid-tick
         self._worker = None
         self._thread = None
-        self.start_stop_btn.setText("Start")
+        self.start_stop_btn.setText(tr("Start"))
         self.start_stop_btn.setEnabled(True)
         self._set_config_enabled(True)
         self._position_timer.stop()
@@ -1397,10 +1453,10 @@ class MainWindow(QMainWindow):
         self.mic_level_bar.setValue(0)
         self.output_level_bar.setValue(0)
         self._is_paused = False
-        self.pause_btn.setText("Pauza")
+        self.pause_btn.setText(tr("Pauza"))
         self.pause_btn.setEnabled(False)
         self._file_paused = False
-        self.file_pause_btn.setText("Pauza pliku")
+        self.file_pause_btn.setText(tr("Pauza pliku"))
         self.file_pause_btn.setEnabled(False)
         self.position_slider.setEnabled(False)
         self.position_slider.setValue(0)
@@ -1425,10 +1481,10 @@ class MainWindow(QMainWindow):
         self._file_paused = not self._file_paused
         if self._file_paused:
             self._worker.pause_file()
-            self.file_pause_btn.setText("Wznów plik")
+            self.file_pause_btn.setText(tr("Wznów plik"))
         else:
             self._worker.resume_file()
-            self.file_pause_btn.setText("Pauza pliku")
+            self.file_pause_btn.setText(tr("Pauza pliku"))
 
     def _on_seek(self) -> None:
         if self._worker is not None:
@@ -1467,7 +1523,7 @@ class MainWindow(QMainWindow):
         cost = _estimated_cost(total_seconds)
         text = f"{minutes:02d}:{seconds:02d} (~${cost:.2f})"
         if self._balance_usd is not None:
-            text += f" | saldo ~${self._balance_usd - cost:.2f}"
+            text += f" | {tr('saldo')} ~${self._balance_usd - cost:.2f}"
         self.session_time_label.setText(text)
 
     def _on_transcript(self, event: TranscriptEvent) -> None:
@@ -1551,14 +1607,12 @@ class MainWindow(QMainWindow):
         suffix = "" if event.is_final else " …"
         if suffix_count >= 2:
             suffix = f" x{suffix_count}"
-        if self._show_lang_tags:
-            return f"{kind} [{event.language}] {event.text}{suffix}"
         return f"{kind} {event.text}{suffix}"
 
     def _rebuild_log(self) -> None:
-        # Re-renders the whole log from history under the current filter/tag
-        # settings, so toggling them re-filters what's already on screen
-        # instead of only affecting transcripts that arrive afterward.
+        # Re-renders the whole log from history under the current filter, so
+        # toggling it re-filters what's already on screen instead of only
+        # affecting transcripts that arrive afterward.
         self.log.clear()
         self._partial_line_active = False
         self._log_repeat_state = {True: (None, 0), False: (None, 0)}
@@ -1568,17 +1622,16 @@ class MainWindow(QMainWindow):
                 continue
             self._place_log_line(event)
 
-    def _on_show_tags_toggled(self, checked: bool) -> None:
-        self._show_lang_tags = checked
-        self._rebuild_log()
-
     def _on_save_transcript(self) -> None:
         content = self.log.toPlainText()
         if not content.strip():
-            QMessageBox.information(self, "Brak transkrypcji", "Nie ma jeszcze żadnej transkrypcji do zapisania.")
+            QMessageBox.information(self, tr("Brak transkrypcji"), tr("Nie ma jeszcze żadnej transkrypcji do zapisania."))
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Zapisz transkrypcję", "transkrypcja.txt", "Pliki tekstowe (*.txt);;Wszystkie pliki (*)"
+            self,
+            tr("Zapisz transkrypcję"),
+            tr("transkrypcja.txt"),
+            f"{tr('Pliki tekstowe')} (*.txt);;{tr('Wszystkie pliki')} (*)",
         )
         if not path:
             return
@@ -1586,7 +1639,7 @@ class MainWindow(QMainWindow):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
         except OSError as e:
-            QMessageBox.critical(self, "Błąd zapisu", f"Nie udało się zapisać pliku: {e}")
+            QMessageBox.critical(self, tr("Błąd zapisu"), f"{tr('Nie udało się zapisać pliku')}: {e}")
 
     def _on_clear_transcript(self) -> None:
         self.log.clear()
@@ -1599,7 +1652,9 @@ class MainWindow(QMainWindow):
 
     def _on_open_error_log(self) -> None:
         if not config.ERROR_LOG_PATH.exists():
-            QMessageBox.information(self, "Brak błędów", "Jeszcze żaden błąd nie został zapisany -- plik errors.log nie istnieje.")
+            QMessageBox.information(
+                self, tr("Brak błędów"), tr("Jeszcze żaden błąd nie został zapisany -- plik errors.log nie istnieje.")
+            )
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(config.ERROR_LOG_PATH)))
 
@@ -1634,11 +1689,11 @@ class MainWindow(QMainWindow):
         for event in self._transcript_history:
             self._overlay.on_transcript(event)
         self._overlay.show()
-        self.overlay_btn.setText("Zamknij okienko z tłumaczeniem")
+        self.overlay_btn.setText(tr("Zamknij okienko z tłumaczeniem"))
 
     def _on_overlay_closed(self) -> None:
         self._overlay = None
-        self.overlay_btn.setText("Odczep okienko z tłumaczeniem")
+        self.overlay_btn.setText(tr("Odczep okienko z tłumaczeniem"))
 
     def _on_open_overlay_settings(self) -> None:
         # Opens the overlay on demand: settings need a live window for preview,
@@ -1649,11 +1704,24 @@ class MainWindow(QMainWindow):
         dialog = OverlaySettingsDialog(self._overlay, self)
         dialog.show()
 
+    def keyPressEvent(self, event) -> None:
+        # A plain letter, unlike F5/F6 (see their own QShortcut comment
+        # above): a QShortcut for a bare letter fires regardless of which
+        # child widget has focus, stealing keystrokes from text-entry
+        # widgets like voice_custom_edit. Overriding keyPressEvent instead
+        # relies on normal Qt event propagation -- a focused QLineEdit
+        # consumes the key itself for typing, so this only ever sees "M"
+        # when no text field is being typed into.
+        if event.key() == Qt.Key.Key_M and not event.modifiers():
+            self.mic_mute_check.toggle()
+            return
+        super().keyPressEvent(event)
+
     def closeEvent(self, event) -> None:
         if self._worker is not None and self._thread is not None:
             thread = self._thread
             worker = self._worker
-            self.status_label.setText("Zamykanie — kończę sesję...")
+            self.status_label.setText(tr("Zamykanie — kończę sesję..."))
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             worker.stop()
             # thread is a plain threading.Thread (see _on_start_stop): it finishes
@@ -1676,17 +1744,19 @@ class MainWindow(QMainWindow):
             if not finished_in_time:
                 answer = QMessageBox.warning(
                     self,
-                    "Zamykanie trwa dłużej niż zwykle",
-                    "Kończenie sesji (np. wolne połączenie) nie zdążyło się zakończyć.\n\n"
-                    "Zamknięcie teraz może zostawić mikrofon/słuchawki zajęte, dopóki "
-                    "aplikacja nie dokończy zwalniania urządzenia w tle — sprawdź Menedżera "
-                    "zadań (python.exe), jeśli dźwięk przestanie działać.\n\n"
-                    "Zamknąć mimo to?",
+                    tr("Zamykanie trwa dłużej niż zwykle"),
+                    tr(
+                        "Kończenie sesji (np. wolne połączenie) nie zdążyło się zakończyć.\n\n"
+                        "Zamknięcie teraz może zostawić mikrofon/słuchawki zajęte, dopóki "
+                        "aplikacja nie dokończy zwalniania urządzenia w tle — sprawdź Menedżera "
+                        "zadań (python.exe), jeśli dźwięk przestanie działać.\n\n"
+                        "Zamknąć mimo to?"
+                    ),
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No,
                 )
                 if answer == QMessageBox.StandardButton.No:
-                    self.status_label.setText("Zatrzymywanie...")
+                    self.status_label.setText(tr("Zatrzymywanie..."))
                     event.ignore()
                     return
         self._save_app_settings()

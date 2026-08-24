@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config
+from .i18n import tr
 from .translation_session import TranscriptEvent
 
 MAX_LINES = 4  # keeps this a compact "recent captions" strip, not a full scrollback
@@ -68,7 +69,7 @@ class OverlayWindow(QWidget):
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self.setWindowTitle("Podgląd tłumaczenia")
+        self.setWindowTitle(tr("Podgląd tłumaczenia"))
         self.setMinimumSize(0, 0)  # let the resize grip shrink freely regardless of content
 
         self._filter_mode = saved["filter_mode"]
@@ -254,7 +255,7 @@ class OverlayWindow(QWidget):
         """
         if self._lines:
             return
-        self._lines = [SAMPLE_TEXT]
+        self._lines = [tr(SAMPLE_TEXT)]
         self._line_kinds = [None]
         self._partial_line_active = False
         self._showing_sample = True
@@ -454,8 +455,8 @@ class OverlayWindow(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
-        settings_action = menu.addAction("Ustawienia wyglądu...")
-        close_action = menu.addAction("Zamknij okienko")
+        settings_action = menu.addAction(tr("Ustawienia wyglądu..."))
+        close_action = menu.addAction(tr("Zamknij okienko"))
         chosen = menu.exec(event.globalPos())
         if chosen == settings_action:
             dialog = OverlaySettingsDialog(self, self)
@@ -474,7 +475,7 @@ class OverlaySettingsDialog(QDialog):
     def __init__(self, overlay: OverlayWindow, parent=None):
         super().__init__(parent)
         self._overlay = overlay
-        self.setWindowTitle("Ustawienia wyglądu")
+        self.setWindowTitle(tr("Ustawienia wyglądu"))
         # This dialog isn't always parented to the overlay (MainWindow's
         # "Ustawienia wyglądu overlay..." button parents it to itself instead,
         # so the panel doesn't vanish behind the main window). Without this,
@@ -490,14 +491,14 @@ class OverlaySettingsDialog(QDialog):
         form = QFormLayout()
 
         self.filter_combo = QComboBox()
-        self.filter_combo.addItem("Źródłowy i tłumaczenie", "both")
-        self.filter_combo.addItem("Tylko źródłowy", "source")
-        self.filter_combo.addItem("Tylko tłumaczenie", "translation")
+        self.filter_combo.addItem(tr("Źródłowy i tłumaczenie"), "both")
+        self.filter_combo.addItem(tr("Tylko źródłowy"), "source")
+        self.filter_combo.addItem(tr("Tylko tłumaczenie"), "translation")
         self.filter_combo.setCurrentIndex(self.filter_combo.findData(overlay._filter_mode))
         self.filter_combo.currentIndexChanged.connect(
             lambda: overlay.set_filter_mode(self.filter_combo.currentData())
         )
-        form.addRow("Pokaż:", self.filter_combo)
+        form.addRow(tr("Pokaż:"), self.filter_combo)
 
         self.font_combo = QFontComboBox()
         self.font_combo.setCurrentFont(overlay._font)
@@ -509,19 +510,19 @@ class OverlaySettingsDialog(QDialog):
         font_row.addWidget(self.size_spin)
         self.font_combo.currentFontChanged.connect(self._on_font_changed)
         self.size_spin.valueChanged.connect(self._on_font_changed)
-        form.addRow("Czcionka:", font_row)
+        form.addRow(tr("Czcionka:"), font_row)
 
         self.font_color_btn = QPushButton()
         self.font_color_btn.setFixedWidth(60)
         self.font_color_btn.setStyleSheet(_swatch_style(overlay._font_color))
         self.font_color_btn.clicked.connect(self._pick_font_color)
-        form.addRow("Kolor tekstu:", self.font_color_btn)
+        form.addRow(tr("Kolor tekstu:"), self.font_color_btn)
 
         self.bg_color_btn = QPushButton()
         self.bg_color_btn.setFixedWidth(60)
         self.bg_color_btn.setStyleSheet(_swatch_style(overlay._bg_color))
         self.bg_color_btn.clicked.connect(self._pick_bg_color)
-        form.addRow("Kolor tła:", self.bg_color_btn)
+        form.addRow(tr("Kolor tła:"), self.bg_color_btn)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
@@ -531,21 +532,21 @@ class OverlaySettingsDialog(QDialog):
         opacity_row = QHBoxLayout()
         opacity_row.addWidget(self.opacity_slider, stretch=1)
         opacity_row.addWidget(self.opacity_label)
-        form.addRow("Nieprzezroczystość tła:", opacity_row)
+        form.addRow(tr("Nieprzezroczystość tła:"), opacity_row)
 
-        self.shadow_check = QCheckBox("Cień pod tekstem")
+        self.shadow_check = QCheckBox(tr("Cień pod tekstem"))
         self.shadow_check.setChecked(overlay._shadow_enabled)
         self.shadow_check.toggled.connect(overlay.set_shadow_enabled)
         form.addRow("", self.shadow_check)
 
-        self.always_on_top_check = QCheckBox("Zawsze na wierzchu")
+        self.always_on_top_check = QCheckBox(tr("Zawsze na wierzchu"))
         self.always_on_top_check.setChecked(
             bool(overlay.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
         )
         self.always_on_top_check.toggled.connect(overlay.set_always_on_top)
         form.addRow("", self.always_on_top_check)
 
-        close_btn = QPushButton("Zamknij")
+        close_btn = QPushButton(tr("Zamknij"))
         close_btn.clicked.connect(self.close)
 
         layout = QVBoxLayout(self)
@@ -556,13 +557,13 @@ class OverlaySettingsDialog(QDialog):
         self._overlay.set_font(self.font_combo.currentFont().family(), self.size_spin.value())
 
     def _pick_font_color(self) -> None:
-        color = QColorDialog.getColor(self._overlay._font_color, self, "Kolor tekstu")
+        color = QColorDialog.getColor(self._overlay._font_color, self, tr("Kolor tekstu"))
         if color.isValid():
             self._overlay.set_font_color(color)
             self.font_color_btn.setStyleSheet(_swatch_style(color))
 
     def _pick_bg_color(self) -> None:
-        color = QColorDialog.getColor(self._overlay._bg_color, self, "Kolor tła")
+        color = QColorDialog.getColor(self._overlay._bg_color, self, tr("Kolor tła"))
         if color.isValid():
             self._overlay.set_background_color(color)
             self.bg_color_btn.setStyleSheet(_swatch_style(color))

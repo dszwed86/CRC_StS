@@ -21,6 +21,7 @@ from palabra_ai import Audio, Palabra, ServerWarning, Transcript
 from palabra_ai.exc import NotReadyError, PalabraError, SessionError
 
 from .audio_io import FileStream
+from .i18n import tr
 
 # Auto-reconnect (see TranslationRunner.run()): only SessionError ("WebSocket
 # connection or session failure") and NotReadyError (pipeline didn't confirm
@@ -146,9 +147,9 @@ class TranslationRunner:
             self._paused_by_user = True
             self._on_state(SessionState.PAUSED)
         except PalabraError as e:
-            self._on_error(f"Błąd: {e}")
+            self._on_error(f"{tr('Błąd')}: {e}")
         except Exception as e:
-            self._on_error(f"Nieoczekiwany błąd: {e}")
+            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
 
     def request_resume(self) -> None:
         """Resumes the server-side task and a paused source. Same threading rule as request_pause."""
@@ -164,9 +165,9 @@ class TranslationRunner:
             self._paused_by_user = False
             self._on_state(SessionState.RUNNING)
         except PalabraError as e:
-            self._on_error(f"Błąd: {e}")
+            self._on_error(f"{tr('Błąd')}: {e}")
         except Exception as e:
-            self._on_error(f"Nieoczekiwany błąd: {e}")
+            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
 
     def request_change_mic_device(self, device_index: int) -> None:
         """Swaps the physical input device a live MicStream reads from.
@@ -181,7 +182,7 @@ class TranslationRunner:
             try:
                 self._source.switch_device(device_index)
             except Exception as e:
-                self._on_error(f"Nie udało się przełączyć mikrofonu: {e}")
+                self._on_error(f"{tr('Nie udało się przełączyć mikrofonu')}: {e}")
 
     def request_set_file(self, path: str | None) -> None:
         """Live add/change/remove of the mixed file source. No-op if the
@@ -203,7 +204,7 @@ class TranslationRunner:
                 file.pause()  # never autoplay a freshly added/changed file
             await self._source.set_file(file)
         except Exception as e:
-            self._on_error(f"Nie udało się ustawić pliku: {e}")
+            self._on_error(f"{tr('Nie udało się ustawić pliku')}: {e}")
 
     def set_mute_output(self, muted: bool) -> None:
         """Live-toggles subtitles-only mode (see __init__'s mute_output for why
@@ -235,9 +236,9 @@ class TranslationRunner:
         try:
             await self._session.flush()
         except PalabraError as e:
-            self._on_error(f"Błąd: {e}")
+            self._on_error(f"{tr('Błąd')}: {e}")
         except Exception as e:
-            self._on_error(f"Nieoczekiwany błąd: {e}")
+            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
 
     def request_change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
         """Switches the TTS voice for the rest of the session via set_task()
@@ -271,9 +272,9 @@ class TranslationRunner:
             task["pipeline"]["translations"][0]["speech_generation"] = speech_gen
             await self._session.set_task(task)
         except PalabraError as e:
-            self._on_error(f"Błąd: {e}")
+            self._on_error(f"{tr('Błąd')}: {e}")
         except Exception as e:
-            self._on_error(f"Nieoczekiwany błąd: {e}")
+            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
         finally:
             if pausable:
                 self._source.resume()
@@ -385,7 +386,7 @@ class TranslationRunner:
                                 if not self._mute_output:
                                     self._sink.play(event.pcm)
                             elif isinstance(event, ServerWarning):
-                                self._on_error(f"Ostrzeżenie: {event.message}")
+                                self._on_error(f"{tr('Ostrzeżenie')}: {event.message}")
                     finally:
                         feeder.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
@@ -398,16 +399,16 @@ class TranslationRunner:
                     self._on_state(SessionState.STOPPED)
                     return
                 connection_dropped = True
-                drop_message = "połączenie zostało zerwane"
+                drop_message = tr("połączenie zostało zerwane")
             except (SessionError, NotReadyError) as e:
                 connection_dropped = True
                 drop_message = str(e)
             except PalabraError as e:
-                self._on_error(f"Błąd: {e}")
+                self._on_error(f"{tr('Błąd')}: {e}")
                 self._on_state(SessionState.ERROR)
                 return
             except Exception as e:  # unexpected (network, device, ...) — surface, don't crash silently
-                self._on_error(f"Nieoczekiwany błąd: {e}")
+                self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
                 self._on_state(SessionState.ERROR)
                 return
             finally:
@@ -421,7 +422,7 @@ class TranslationRunner:
                 # (possibly unrelated) blip already started using up.
                 attempt = 0
             if self._stop.is_set() or attempt >= RECONNECT_MAX_ATTEMPTS:
-                self._on_error(f"Błąd: {drop_message}")
+                self._on_error(f"{tr('Błąd')}: {drop_message}")
                 self._on_state(SessionState.ERROR)
                 return
             backoff = RECONNECT_BACKOFF_SECONDS[min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)]
@@ -435,7 +436,8 @@ class TranslationRunner:
             # window Palabra isn't actually billing for.
             self._on_state(SessionState.RECONNECTING)
             self._on_error(
-                f"Połączenie przerwane ({drop_message}) -- ponawiam próbę {attempt}/{RECONNECT_MAX_ATTEMPTS} za {backoff:.0f}s..."
+                f"{tr('Połączenie przerwane')} ({drop_message}) -- {tr('ponawiam próbę')} "
+                f"{attempt}/{RECONNECT_MAX_ATTEMPTS} {tr('za')} {backoff:.0f}s..."
             )
             elapsed = 0.0
             while elapsed < backoff:
