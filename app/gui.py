@@ -788,8 +788,32 @@ class MainWindow(QMainWindow):
         self.position_slider.setEnabled(False)
         self.position_slider.sliderReleased.connect(self._on_seek)
         self.position_label = QLabel("00:00 / 00:00")
+        # Skip buttons: rewind ones go left of the slider, fast-forward ones
+        # right of it (common media-player layout) -- same enabled/visible
+        # lifecycle as position_slider itself (see _set_skip_buttons_enabled/
+        # _set_skip_buttons_visible and their call sites).
+        self.skip_buttons: list[QPushButton] = []
+        for offset_s in (-7, -3, -1):
+            btn = QPushButton(f"{offset_s}s")
+            btn.setFixedWidth(36)
+            btn.setToolTip(f"{tr('Przewija plik o')} {offset_s}s")
+            btn.clicked.connect(lambda checked=False, s=offset_s: self._on_skip_file(s))
+            btn.setEnabled(False)
+            btn.setVisible(False)
+            self.skip_buttons.append(btn)
         file_playback_layout.addWidget(self.file_pause_btn)
+        for btn in self.skip_buttons:
+            file_playback_layout.addWidget(btn)
         file_playback_layout.addWidget(self.position_slider, stretch=1)
+        for offset_s in (1, 3, 7):
+            btn = QPushButton(f"+{offset_s}s")
+            btn.setFixedWidth(36)
+            btn.setToolTip(f"{tr('Przewija plik o')} +{offset_s}s")
+            btn.clicked.connect(lambda checked=False, s=offset_s: self._on_skip_file(s))
+            btn.setEnabled(False)
+            btn.setVisible(False)
+            self.skip_buttons.append(btn)
+            file_playback_layout.addWidget(btn)
         file_playback_layout.addWidget(self.position_label)
         # Same visibility lifecycle as position_slider/position_label below --
         # no file selected yet at construction time.
@@ -1216,6 +1240,7 @@ class MainWindow(QMainWindow):
         self.file_clear_btn.setEnabled(True)
         self.position_slider.setVisible(True)
         self.position_label.setVisible(True)
+        self._set_skip_buttons_visible(True)
         self.file_pause_btn.setVisible(True)
         if self._worker is not None:
             # Live add/change mid-session: same "never autoplay" rule as a
@@ -1226,6 +1251,7 @@ class MainWindow(QMainWindow):
             self.file_pause_btn.setText(tr("Wznów plik"))
             self.file_pause_btn.setEnabled(True)
             self.position_slider.setEnabled(False)
+            self._set_skip_buttons_enabled(False)
             self._position_timer.start()
             self._worker.set_file(path)
 
@@ -1235,7 +1261,9 @@ class MainWindow(QMainWindow):
         self.file_clear_btn.setEnabled(False)
         self.position_slider.setVisible(False)
         self.position_label.setVisible(False)
+        self._set_skip_buttons_visible(False)
         self.position_slider.setEnabled(False)
+        self._set_skip_buttons_enabled(False)
         self.position_slider.setValue(0)
         self.position_label.setText("00:00 / 00:00")
         self.file_pause_btn.setVisible(False)
@@ -1459,6 +1487,7 @@ class MainWindow(QMainWindow):
         self.file_pause_btn.setText(tr("Pauza pliku"))
         self.file_pause_btn.setEnabled(False)
         self.position_slider.setEnabled(False)
+        self._set_skip_buttons_enabled(False)
         self.position_slider.setValue(0)
         self.position_label.setText("00:00 / 00:00")
 
@@ -1490,6 +1519,24 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.seek(float(self.position_slider.value()))
 
+    def _on_skip_file(self, offset_seconds: int) -> None:
+        if self._worker is None:
+            return
+        total = self._worker.total_ms
+        if total <= 0:
+            return  # file not decoded yet
+        new_position = max(0.0, min(self._worker.position_ms + offset_seconds * 1000, total))
+        self._worker.seek(new_position)
+        self.position_slider.setValue(int(new_position))  # instant feedback, not waiting for _update_position's next tick
+
+    def _set_skip_buttons_enabled(self, enabled: bool) -> None:
+        for btn in self.skip_buttons:
+            btn.setEnabled(enabled)
+
+    def _set_skip_buttons_visible(self, visible: bool) -> None:
+        for btn in self.skip_buttons:
+            btn.setVisible(visible)
+
     def _update_position(self) -> None:
         if self._worker is None:
             self._position_timer.stop()
@@ -1499,6 +1546,7 @@ class MainWindow(QMainWindow):
             return  # file not decoded yet
         if not self.position_slider.isEnabled():
             self.position_slider.setEnabled(True)
+            self._set_skip_buttons_enabled(True)
             self.position_slider.setRange(0, int(total))
         if not self.position_slider.isSliderDown():
             self.position_slider.setValue(int(self._worker.position_ms))

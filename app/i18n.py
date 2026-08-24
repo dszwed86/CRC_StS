@@ -158,6 +158,7 @@ _TRANSLATIONS: dict[str, str] = {
     ),
     "Poziom sygnału:": "Signal level:",
     "Poziom wyjścia:": "Output level:",
+    "Przewija plik o": "Skips the file by",
     "Połączenie przerwane": "Connection dropped",
     "Przekroczono czas oczekiwania na odpowiedź serwera.": "Timed out waiting for the server's response.",
     "Razem": "Total",

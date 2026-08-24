@@ -213,6 +213,10 @@ w Ustawieniach, żeby zobaczyć rzeczywiste zużycie).
   Wstrzymuje/wznawia **wyłącznie odtwarzanie pliku**, lokalnie — mikrofon zostaje aktywny i
   wciąż tłumaczony (naliczanie u Palabry trwa dalej) przez cały ten czas. Wznawia dokładnie
   od tego samego miejsca w pliku.
+- **Przyciski przewijania** (`-7s` `-3s` `-1s` obok suwaka, `+1s` `+3s` `+7s` po jego drugiej
+  stronie) — przeskakują o stałą liczbę sekund w tył/przód od aktualnej pozycji, z
+  ograniczeniem do 0 i do końca pliku. Aktywne dokładnie wtedy, kiedy sam suwak pozycji jest
+  aktywny (czyli po zdekodowaniu pliku).
 
 **Plik — zawsze widoczny, opcjonalny, można zmieniać w trakcie sesji:**
 
