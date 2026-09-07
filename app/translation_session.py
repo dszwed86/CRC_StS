@@ -17,15 +17,25 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Protocol
 
+import websockets
 from palabra_ai import Audio, Palabra, ServerWarning, Transcript
 from palabra_ai.exc import NotReadyError, PalabraError, SessionError
 
 from .audio_io import FileStream
 from .i18n import tr
 
-# Auto-reconnect (see TranslationRunner.run()): only SessionError ("WebSocket
-# connection or session failure") and NotReadyError (pipeline didn't confirm
-# in time) are retried -- both are plausibly transient network/timing blips.
+# Auto-reconnect (see TranslationRunner.run()): SessionError ("WebSocket
+# connection or session failure"), NotReadyError (pipeline didn't confirm
+# in time), and websockets.exceptions.ConnectionClosed are retried -- all
+# three are plausibly transient network/timing blips. The last one matters
+# because palabra_ai's own send-side calls (send_audio/end/pause/resume/
+# flush/set_task, see client.py's _send()) call the raw websocket's .send()
+# directly with NO try/except -- a drop discovered while WE are sending
+# (as opposed to the receive loop silently swallowing it, see run()'s
+# docstring) surfaces as a raw websockets exception, not a palabra_ai one.
+# Real production logs showed this exact gap: "Nieoczekiwany błąd: no close
+# frame received or sent" (ConnectionClosedError's own message) went
+# straight to a terminal ERROR instead of triggering a reconnect.
 # AuthError/TaskError are never retried: a bad key or a rejected command
 # won't fix itself by reconnecting, so failing fast matches today's
 # behavior for those.
@@ -351,7 +361,18 @@ class TranslationRunner:
                             if self._stop.is_set():
                                 break
                             await session.send_audio(chunk)
-                        await session.end(eos_timeout=4)
+                        try:
+                            await session.end(eos_timeout=4)
+                        except TypeError:
+                            # Defends against palabra_ai SDK drift: production
+                            # logs caught "TranslationSession.end() got an
+                            # unexpected keyword argument 'eos_timeout'" after
+                            # an SDK version resolved at a different build
+                            # didn't support this parameter yet. Losing the
+                            # eos_timeout tail-wait is a much smaller problem
+                            # than every single Stop click surfacing as an
+                            # error.
+                            await session.end()
 
                     feeder = asyncio.create_task(feed())
                     # If feed() raises (e.g. the source's chunks() blows up immediately --
@@ -400,16 +421,22 @@ class TranslationRunner:
                     return
                 connection_dropped = True
                 drop_message = tr("połączenie zostało zerwane")
-            except (SessionError, NotReadyError) as e:
+            except (SessionError, NotReadyError, websockets.exceptions.ConnectionClosed) as e:
                 connection_dropped = True
                 drop_message = str(e)
             except PalabraError as e:
                 self._on_error(f"{tr('Błąd')}: {e}")
-                self._on_state(SessionState.ERROR)
+                # If the user already asked to stop, this exception almost
+                # certainly happened while trying to say a clean goodbye on
+                # an already-dying connection (e.g. session.end() failing) --
+                # the stop itself still succeeded, so report it as such
+                # rather than alarming the user with "Error" for something
+                # that was, from their point of view, a successful Stop.
+                self._on_state(SessionState.STOPPED if self._stop.is_set() else SessionState.ERROR)
                 return
             except Exception as e:  # unexpected (network, device, ...) — surface, don't crash silently
                 self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
-                self._on_state(SessionState.ERROR)
+                self._on_state(SessionState.STOPPED if self._stop.is_set() else SessionState.ERROR)
                 return
             finally:
                 self._session = None
@@ -421,7 +448,14 @@ class TranslationRunner:
                 # than continuing to spend the same budget a much earlier
                 # (possibly unrelated) blip already started using up.
                 attempt = 0
-            if self._stop.is_set() or attempt >= RECONNECT_MAX_ATTEMPTS:
+            if self._stop.is_set():
+                # The drop was detected exactly while (or after) the user
+                # asked to stop -- e.g. send_audio()/session.end() hit an
+                # already-dying connection during shutdown. The stop itself
+                # still succeeded; report it as such instead of ERROR.
+                self._on_state(SessionState.STOPPED)
+                return
+            if attempt >= RECONNECT_MAX_ATTEMPTS:
                 self._on_error(f"{tr('Błąd')}: {drop_message}")
                 self._on_state(SessionState.ERROR)
                 return

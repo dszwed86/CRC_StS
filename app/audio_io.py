@@ -32,8 +32,8 @@ BYTES_PER_MS = RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
 MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
 MAX_OUTPUT_BACKLOG_SAMPLES = int(RATE * 1.2)  # ~1.2s -- see OutputSink.play()
-STREAM_OPEN_RETRY_ATTEMPTS = 3
-STREAM_OPEN_RETRY_DELAY_SECONDS = 0.5
+STREAM_OPEN_RETRY_ATTEMPTS = 5
+STREAM_OPEN_RETRY_DELAY_SECONDS = 1.0
 
 _T = TypeVar("_T")
 
@@ -41,12 +41,17 @@ _T = TypeVar("_T")
 def _open_with_retry(factory: Callable[[], _T]) -> _T:
     """Retries opening a PortAudio stream a few times with a short delay on
     sd.PortAudioError -- in particular paInternalError ([PaErrorCode -9986]),
-    which real-world logs from this app showed happening 2-3 times in a row
-    seconds apart and then resolving on its own (a user manually clicking
-    Start again worked, eventually). This is a well-known transient failure
-    on Windows WASAPI -- e.g. another app briefly holding exclusive access
-    to the same device, or the Windows audio engine mid-reinitializing a
-    device -- not something a single failed attempt should treat as fatal.
+    which real-world logs from this app showed happening repeatedly (up to
+    6 times across ~30s in one session) and then resolving on its own (a
+    user manually clicking Start again eventually worked). This is a
+    well-known transient failure on Windows WASAPI -- e.g. another app
+    briefly holding exclusive access to the same device, or the Windows
+    audio engine mid-reinitializing a device -- not something a single
+    failed attempt should treat as fatal. The original budget here (3
+    attempts, 0.5s apart, ~1s total) turned out too short for some of those
+    real cases -- widened to 5 attempts / 1s apart (~4s total) so a single
+    Start click has a real chance to ride out the conflict instead of
+    requiring the user to keep re-clicking.
 
     Other exception types (a bad device index, invalid parameters) are not
     retried -- those fail identically every time, so retrying would only
