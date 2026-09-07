@@ -889,7 +889,21 @@ class OutputSink:
         with self._q.mutex:
             backlog = sum(len(item) for item in self._q.queue)
             while backlog > MAX_OUTPUT_BACKLOG_SAMPLES and self._q.queue:
-                backlog -= len(self._q.queue.popleft())
+                # Trim precisely TO the cap, not just below it: each queued
+                # item is one whole Audio event's PCM (server-sized, not
+                # bounded to any fixed chunk length by this app), so
+                # dropping it whole on popleft() alone can throw away far
+                # more translated speech than the overshoot actually
+                # requires -- an audible extra skip on top of the intended
+                # ~1.2s cap. A numpy slice is a view, not a copy, so keeping
+                # the un-trimmed tail of the oldest item is cheap.
+                oldest = self._q.queue[0]
+                overshoot = backlog - MAX_OUTPUT_BACKLOG_SAMPLES
+                if len(oldest) > overshoot:
+                    self._q.queue[0] = oldest[overshoot:]
+                    backlog -= overshoot
+                else:
+                    backlog -= len(self._q.queue.popleft())
 
     def clear(self) -> None:
         """Drops any buffered-but-not-yet-played audio (e.g. right after a seek).

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -18,7 +19,7 @@ from enum import Enum, auto
 from typing import Protocol
 
 import websockets
-from palabra_ai import Audio, Palabra, ServerError, ServerWarning, Transcript
+from palabra_ai import Audio, Palabra, Raw, ServerError, ServerWarning, Transcript
 from palabra_ai.exc import NotReadyError, PalabraError, SessionError
 
 from .audio_io import FileStream
@@ -520,6 +521,19 @@ class TranslationRunner:
                                 # user has SOME diagnostic instead of a
                                 # silently-ignored request.
                                 self._on_error(f"{tr('Błąd serwera')}: {event.code} — {event.desc}")
+                            elif isinstance(event, Raw):
+                                # Whatever message_type isn't one of the
+                                # cases above -- per the SDK's own docstring,
+                                # possibly pipeline_timings/tts_buffer_stats,
+                                # which this app doesn't parse or use for
+                                # anything yet. Diagnostic-only: printed to
+                                # stderr (invisible in the packaged
+                                # --windowed build, so this never clutters a
+                                # real user's log) rather than routed through
+                                # self._on_error, purely so a session run
+                                # from source can reveal whether the server
+                                # actually sends these and what they contain.
+                                print(f"[Raw event] type={event.type} data={event.data}", file=sys.stderr)
                     finally:
                         feeder.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
