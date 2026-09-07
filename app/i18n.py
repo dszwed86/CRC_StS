@@ -26,6 +26,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Brak urządzenia wyjściowego": "No output device",
     "Błąd": "Error",
     "Błąd połączenia": "Connection error",
+    "Błąd serwera": "Server error",
     "Błąd testu wyjścia": "Output test error",
     "Błąd urządzenia audio": "Audio device error",
     "Błąd zapisu": "Save error",

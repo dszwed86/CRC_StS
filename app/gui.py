@@ -57,7 +57,7 @@ from .audio_io import (
     rescan_devices,
 )
 from .languages import DEFAULT_SOURCE, DEFAULT_TARGET, SOURCE_LANGUAGES, TARGET_LANGUAGES
-from .overlay import OverlaySettingsDialog, OverlayWindow
+from .overlay import OverlayWindow
 from .translation_session import SessionState, TranscriptEvent, TranslationRunner
 
 REGION = "eu"  # only region that currently serves the translation product
@@ -1492,7 +1492,16 @@ class MainWindow(QMainWindow):
         self.position_label.setText("00:00 / 00:00")
 
     def _on_pause_resume(self) -> None:
-        if self._worker is None or self._pause_request_pending:
+        # pause_btn.isEnabled() also covers SessionState.RECONNECTING (see
+        # _on_state, which disables it there because request_pause() safely
+        # no-ops mid-reconnect with no state_changed signal to ever come
+        # back). A mouse click on the disabled button already can't reach
+        # here, but the F6 QShortcut fires regardless of widget state --
+        # without this check, F6 during a reconnect sets
+        # _pause_request_pending without any signal that will ever clear
+        # it, silently swallowing every later pause/resume attempt until
+        # the next unrelated state change happens to reset it.
+        if self._worker is None or self._pause_request_pending or not self.pause_btn.isEnabled():
             return
         self._pause_request_pending = True
         if self._is_paused:
@@ -1749,8 +1758,7 @@ class MainWindow(QMainWindow):
         # you haven't explicitly "detached" it yet.
         if self._overlay is None:
             self._open_overlay()
-        dialog = OverlaySettingsDialog(self._overlay, self)
-        dialog.show()
+        self._overlay.open_settings_dialog(self)
 
     def keyPressEvent(self, event) -> None:
         # A plain letter, unlike F5/F6 (see their own QShortcut comment

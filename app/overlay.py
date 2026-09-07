@@ -80,6 +80,11 @@ class OverlayWindow(QWidget):
         self._shadow_enabled = False  # applied for real below, once text_edit exists
         self._drag_offset: QPoint | None = None
         self._showing_sample = False
+        # Tracks the one live OverlaySettingsDialog for this overlay, if any
+        # -- see open_settings_dialog(), which both entry points (MainWindow's
+        # button and this window's own right-click menu) go through instead
+        # of constructing their own.
+        self._settings_dialog: OverlaySettingsDialog | None = None
 
         # Debounced so a drag/resize gesture (many move/resize events per
         # second) doesn't hit disk on every single one -- only once it settles.
@@ -453,18 +458,41 @@ class OverlayWindow(QWidget):
         super().moveEvent(event)
         self._geometry_save_timer.start()
 
+    def open_settings_dialog(self, parent=None) -> OverlaySettingsDialog:
+        """Reuses an already-open settings dialog for this overlay instead of
+        spawning a duplicate. Both entry points (MainWindow's "Ustawienia
+        wyglądu overlay..." button and this window's own right-click menu)
+        go through here: two independent dialogs on the same overlay used
+        to be able to step on each other -- each one's closeEvent calls
+        clear_sample(), so closing either one could wipe the live preview
+        out from under the other, still-open one.
+        """
+        if self._settings_dialog is None:
+            self._settings_dialog = OverlaySettingsDialog(self, parent)
+        self._settings_dialog.show()
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
+        return self._settings_dialog
+
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
         settings_action = menu.addAction(tr("Ustawienia wyglądu..."))
         close_action = menu.addAction(tr("Zamknij okienko"))
         chosen = menu.exec(event.globalPos())
         if chosen == settings_action:
-            dialog = OverlaySettingsDialog(self, self)
-            dialog.show()
+            self.open_settings_dialog(self)
         elif chosen == close_action:
             self.close()
 
     def closeEvent(self, event) -> None:
+        if self._geometry_save_timer.isActive():
+            # A move/resize happened within the last 400ms and the debounced
+            # save hasn't fired yet -- without this, closing right after a
+            # drag/resize (the overlay itself, or the whole app) silently
+            # discards that last position/size change, since nothing else
+            # would ever call _save_settings() for it once this window is gone.
+            self._geometry_save_timer.stop()
+            self._save_settings()
         self.closed.emit()
         super().closeEvent(event)
 
@@ -573,5 +601,7 @@ class OverlaySettingsDialog(QDialog):
         self.opacity_label.setText(f"{value}%")
 
     def closeEvent(self, event) -> None:
+        if self._overlay._settings_dialog is self:
+            self._overlay._settings_dialog = None
         self._overlay.clear_sample()
         super().closeEvent(event)

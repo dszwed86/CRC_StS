@@ -18,7 +18,7 @@ from enum import Enum, auto
 from typing import Protocol
 
 import websockets
-from palabra_ai import Audio, Palabra, ServerWarning, Transcript
+from palabra_ai import Audio, Palabra, ServerError, ServerWarning, Transcript
 from palabra_ai.exc import NotReadyError, PalabraError, SessionError
 
 from .audio_io import FileStream
@@ -124,6 +124,14 @@ class TranslationRunner:
         # (which is torn down and recreated on every reconnect) -- see
         # run()'s use of this right after a reconnect completes.
         self._paused_by_user = False
+        # Serializes the request_*() family (pause/resume/flush/change-voice/
+        # set-file): each queues its _do_*() onto the loop via
+        # asyncio.create_task() with no ordering guarantee of its own, so a
+        # quick double-click (e.g. Pauza then Wznow) could otherwise let
+        # whichever network round-trip resolves LAST win, not whichever was
+        # clicked last. This makes them run strictly in the order they were
+        # queued instead.
+        self._request_lock = asyncio.Lock()
 
     def stop(self) -> None:
         """Requests a graceful stop: feeding ends, session.end() flushes the translation tail."""
@@ -141,25 +149,41 @@ class TranslationRunner:
         asyncio.create_task(self._do_pause())
 
     async def _do_pause(self) -> None:
-        # stop() may have already run by the time this (queued via
-        # call_soon_threadsafe from the GUI thread) actually executes -- e.g.
-        # the user clicked Pauza then Stop in quick succession. stop() always
-        # resumes the source before setting self._stop precisely so a paused
-        # source can't block feed() forever, but if we pause it AFTER that,
-        # nothing ever resumes it again and feed() hangs (a paused source's
-        # chunks() never yields, which is the only place feed() re-checks
-        # self._stop). Bail out here instead of undoing stop()'s resume().
-        if self._stop.is_set():
-            return
-        try:
-            self._source.pause()
-            await self._session.pause()
-            self._paused_by_user = True
-            self._on_state(SessionState.PAUSED)
-        except PalabraError as e:
-            self._on_error(f"{tr('Błąd')}: {e}")
-        except Exception as e:
-            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
+        async with self._request_lock:
+            # stop() may have already run by the time this (queued via
+            # call_soon_threadsafe from the GUI thread) actually executes --
+            # e.g. the user clicked Pauza then Stop in quick succession.
+            # stop() always resumes the source before setting self._stop
+            # precisely so a paused source can't block feed() forever, but if
+            # we pause it AFTER that, nothing ever resumes it again and
+            # feed() hangs (a paused source's chunks() never yields, which is
+            # the only place feed() re-checks self._stop). Bail out here
+            # instead of undoing stop()'s resume().
+            if self._stop.is_set():
+                return
+            try:
+                self._source.pause()
+                await self._session.pause()
+                # stop() runs synchronously on the GUI thread and can land
+                # at ANY point during the two awaits above -- including
+                # strictly between this coroutine's own is_set() check
+                # (above) and here. If that happens, stop()'s resume() call
+                # already ran (and found nothing paused yet, so it did
+                # nothing) before OUR pause() call above re-paused the
+                # source -- nothing left in the system will ever call
+                # resume() again, hanging feed() forever. Re-checking here,
+                # after the pause work is done, and undoing it ourselves if
+                # stop() won the race in the meantime, closes that window.
+                if self._stop.is_set():
+                    if hasattr(self._source, "resume"):
+                        self._source.resume()
+                    return
+                self._paused_by_user = True
+                self._on_state(SessionState.PAUSED)
+            except PalabraError as e:
+                self._on_error(f"{tr('Błąd')}: {e}")
+            except Exception as e:
+                self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
 
     def request_resume(self) -> None:
         """Resumes the server-side task and a paused source. Same threading rule as request_pause."""
@@ -168,16 +192,19 @@ class TranslationRunner:
         asyncio.create_task(self._do_resume())
 
     async def _do_resume(self) -> None:
-        try:
-            await self._session.resume()
-            if hasattr(self._source, "resume"):
-                self._source.resume()
-            self._paused_by_user = False
-            self._on_state(SessionState.RUNNING)
-        except PalabraError as e:
-            self._on_error(f"{tr('Błąd')}: {e}")
-        except Exception as e:
-            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
+        async with self._request_lock:
+            if self._stop.is_set():
+                return
+            try:
+                await self._session.resume()
+                if hasattr(self._source, "resume"):
+                    self._source.resume()
+                self._paused_by_user = False
+                self._on_state(SessionState.RUNNING)
+            except PalabraError as e:
+                self._on_error(f"{tr('Błąd')}: {e}")
+            except Exception as e:
+                self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
 
     def request_change_mic_device(self, device_index: int) -> None:
         """Swaps the physical input device a live MicStream reads from.
@@ -208,13 +235,16 @@ class TranslationRunner:
         asyncio.create_task(self._do_set_file(path))
 
     async def _do_set_file(self, path: str | None) -> None:
-        try:
-            file = FileStream(path) if path is not None else None
-            if file is not None:
-                file.pause()  # never autoplay a freshly added/changed file
-            await self._source.set_file(file)
-        except Exception as e:
-            self._on_error(f"{tr('Nie udało się ustawić pliku')}: {e}")
+        async with self._request_lock:
+            if self._stop.is_set():
+                return
+            try:
+                file = FileStream(path) if path is not None else None
+                if file is not None:
+                    file.pause()  # never autoplay a freshly added/changed file
+                await self._source.set_file(file)
+            except Exception as e:
+                self._on_error(f"{tr('Nie udało się ustawić pliku')}: {e}")
 
     def set_mute_output(self, muted: bool) -> None:
         """Live-toggles subtitles-only mode (see __init__'s mute_output for why
@@ -243,12 +273,15 @@ class TranslationRunner:
             asyncio.create_task(self._do_flush())
 
     async def _do_flush(self) -> None:
-        try:
-            await self._session.flush()
-        except PalabraError as e:
-            self._on_error(f"{tr('Błąd')}: {e}")
-        except Exception as e:
-            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
+        async with self._request_lock:
+            if self._stop.is_set():
+                return
+            try:
+                await self._session.flush()
+            except PalabraError as e:
+                self._on_error(f"{tr('Błąd')}: {e}")
+            except Exception as e:
+                self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
 
     def request_change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
         """Switches the TTS voice for the rest of the session via set_task()
@@ -260,34 +293,46 @@ class TranslationRunner:
         asyncio.create_task(self._do_change_voice(voice_id, voice_cloning))
 
     async def _do_change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
-        # Briefly pause the source (not the reported SessionState -- the UI
-        # doesn't need to show "Wstrzymano" for this) around the set_task()
-        # call: the server likely reinitializes its speech-generation
-        # pipeline for the new voice, and continuing to stream audio while
-        # that happens showed up as a spurious "arriving faster than
-        # real-time" warning even though our own send pacing measured
-        # correctly throughout. Pausing/resuming the source also makes it
-        # resync its own pacing anchor afterwards (already the case for both
-        # MicStream and FileStream), instead of racing to catch up.
-        pausable = hasattr(self._source, "pause") and hasattr(self._source, "resume")
-        if pausable:
-            self._source.pause()
-        try:
-            task = copy.deepcopy(self._session.task)
-            speech_gen: dict[str, object] = {}
-            if voice_cloning:
-                speech_gen["voice_cloning"] = True
-            elif voice_id is not None:
-                speech_gen["voice_id"] = voice_id
-            task["pipeline"]["translations"][0]["speech_generation"] = speech_gen
-            await self._session.set_task(task)
-        except PalabraError as e:
-            self._on_error(f"{tr('Błąd')}: {e}")
-        except Exception as e:
-            self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
-        finally:
+        async with self._request_lock:
+            if self._stop.is_set():
+                return
+            # Briefly pause the source (not the reported SessionState -- the
+            # UI doesn't need to show "Wstrzymano" for this) around the
+            # set_task() call: the server likely reinitializes its speech-
+            # generation pipeline for the new voice, and continuing to
+            # stream audio while that happens showed up as a spurious
+            # "arriving faster than real-time" warning even though our own
+            # send pacing measured correctly throughout. Pausing/resuming
+            # the source also makes it resync its own pacing anchor
+            # afterwards (already the case for both MicStream and
+            # FileStream), instead of racing to catch up.
+            #
+            # was_paused_by_user remembers whether the user had ALREADY
+            # paused before this call started -- if so, the `finally` below
+            # must NOT resume the source afterwards: doing so unconditionally
+            # (as this used to) silently resumed real audio/billing behind a
+            # GUI still showing "Wstrzymano", with request_resume() the only
+            # (and now confusingly redundant) way to notice anything was off.
+            pausable = hasattr(self._source, "pause") and hasattr(self._source, "resume")
+            was_paused_by_user = self._paused_by_user
             if pausable:
-                self._source.resume()
+                self._source.pause()
+            try:
+                task = copy.deepcopy(self._session.task)
+                speech_gen: dict[str, object] = {}
+                if voice_cloning:
+                    speech_gen["voice_cloning"] = True
+                elif voice_id is not None:
+                    speech_gen["voice_id"] = voice_id
+                task["pipeline"]["translations"][0]["speech_generation"] = speech_gen
+                await self._session.set_task(task)
+            except PalabraError as e:
+                self._on_error(f"{tr('Błąd')}: {e}")
+            except Exception as e:
+                self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
+            finally:
+                if pausable and not was_paused_by_user:
+                    self._source.resume()
 
     async def run(self) -> None:
         """Runs the session, auto-reconnecting up to RECONNECT_MAX_ATTEMPTS
@@ -408,6 +453,15 @@ class TranslationRunner:
                                     self._sink.play(event.pcm)
                             elif isinstance(event, ServerWarning):
                                 self._on_error(f"{tr('Ostrzeżenie')}: {event.message}")
+                            elif isinstance(event, ServerError):
+                                # Distinct from ServerWarning: the SDK's own
+                                # docs describe post-readiness ServerError as
+                                # "recoverable errors" the stream survives on
+                                # its own (e.g. a rejected set_task from
+                                # request_change_voice) -- surfaced so the
+                                # user has SOME diagnostic instead of a
+                                # silently-ignored request.
+                                self._on_error(f"{tr('Błąd serwera')}: {event.code} — {event.desc}")
                     finally:
                         feeder.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
