@@ -163,6 +163,23 @@ class TranslationRunner:
                 return
             try:
                 self._source.pause()
+                if self._session is None:
+                    # self._session is torn down to None on EVERY reconnect
+                    # (see run()'s `finally: self._session = None`),
+                    # independent of self._stop -- and can go stale while
+                    # THIS request sat queued behind _request_lock (e.g. a
+                    # slow _do_change_voice() holding it while a drop
+                    # happened underneath). There's no live session left to
+                    # tell -- but the pause intent is still real: the source
+                    # is already paused above, so just record the intent and
+                    # let run()'s own reconnect-completion logic (which
+                    # already checks _paused_by_user and re-applies pause +
+                    # reports PAUSED once a fresh session connects) pick it
+                    # up from here, instead of letting `await
+                    # self._session.pause()` below raise AttributeError on
+                    # None with nothing left to undo the pause() call above.
+                    self._paused_by_user = True
+                    return
                 await self._session.pause()
                 # stop() runs synchronously on the GUI thread and can land
                 # at ANY point during the two awaits above -- including
@@ -196,6 +213,18 @@ class TranslationRunner:
             if self._stop.is_set():
                 return
             try:
+                if self._session is None:
+                    # Same staleness as _do_pause() above -- mid-reconnect,
+                    # no live session to tell yet, but the resume intent is
+                    # real: unblock the source now (so feed() doesn't stay
+                    # artificially paused once a fresh session connects) and
+                    # clear the pause flag so run()'s reconnect-completion
+                    # logic reports RUNNING on the new session instead of
+                    # re-pausing it.
+                    if hasattr(self._source, "resume"):
+                        self._source.resume()
+                    self._paused_by_user = False
+                    return
                 await self._session.resume()
                 if hasattr(self._source, "resume"):
                     self._source.resume()
@@ -212,14 +241,27 @@ class TranslationRunner:
         Unlike request_change_voice (which needs set_task() -- a real
         server-side call), this is purely local device I/O: the Palabra
         session never sees which physical microphone produced the PCM
-        bytes it receives, so this never touches the session at all. Same
+        bytes it receives, so this never touches the session at all -- no
+        self._request_lock needed either, since it shares no mutable state
+        with the session-level requests that lock serializes. Same
         threading rule as request_pause/request_seek.
+
+        Queued via create_task() like the others (this used to call
+        switch_device() directly, synchronously): opening the new device
+        can hit the same transient PortAudio errors _open_with_retry is
+        built to ride out, and switch_device() is now itself async
+        specifically so those retries yield to the loop instead of
+        blocking run()'s receive loop and feed() for the whole retry
+        budget (~4s) on a flaky device.
         """
         if hasattr(self._source, "switch_device"):
-            try:
-                self._source.switch_device(device_index)
-            except Exception as e:
-                self._on_error(f"{tr('Nie udało się przełączyć mikrofonu')}: {e}")
+            asyncio.create_task(self._do_change_mic_device(device_index))
+
+    async def _do_change_mic_device(self, device_index: int) -> None:
+        try:
+            await self._source.switch_device(device_index)
+        except Exception as e:
+            self._on_error(f"{tr('Nie udało się przełączyć mikrofonu')}: {e}")
 
     def request_set_file(self, path: str | None) -> None:
         """Live add/change/remove of the mixed file source. No-op if the
@@ -274,7 +316,14 @@ class TranslationRunner:
 
     async def _do_flush(self) -> None:
         async with self._request_lock:
-            if self._stop.is_set():
+            if self._stop.is_set() or self._session is None:
+                # self._session goes stale (None) on every reconnect,
+                # independent of self._stop, and can flip while this request
+                # sat queued behind _request_lock -- the seek itself already
+                # happened synchronously in request_seek() regardless, so
+                # there's nothing useful left to flush against a session
+                # that no longer exists (and no source-side state to
+                # unwind here, unlike _do_pause/_do_resume).
                 return
             try:
                 await self._session.flush()
@@ -318,6 +367,15 @@ class TranslationRunner:
             if pausable:
                 self._source.pause()
             try:
+                if self._session is None:
+                    # Mid-reconnect (self._session goes stale on every
+                    # reconnect, independent of self._stop) -- nothing to
+                    # change voice on right now. The `finally` below still
+                    # correctly restores the source's pause state either
+                    # way, this just skips a confusing "NoneType has no
+                    # attribute 'task'" message for what is really just
+                    # "try again once reconnected."
+                    return
                 task = copy.deepcopy(self._session.task)
                 speech_gen: dict[str, object] = {}
                 if voice_cloning:

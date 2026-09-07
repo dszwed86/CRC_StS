@@ -68,6 +68,30 @@ def _open_with_retry(factory: Callable[[], _T]) -> _T:
     raise last_error
 
 
+async def _open_with_retry_async(factory: Callable[[], _T]) -> _T:
+    """Same retry/backoff logic as _open_with_retry(), but yields to the
+    event loop between attempts (await asyncio.sleep) instead of blocking
+    it with time.sleep(). For use from within an already-running asyncio
+    loop -- MicStream.switch_device(), called mid-session while run()'s
+    receive loop and feed() need to keep progressing on the same thread --
+    unlike the plain synchronous version, which is fine for the initial
+    device open in SessionWorker.start() (that happens before the loop
+    starts pumping any coroutines at all, so blocking there is harmless).
+    A real production trace showed this matters: a flaky device hitting
+    all 5 retries would otherwise stall the whole session (including the
+    receive loop processing server events) for the full ~4s budget.
+    """
+    last_error: sd.PortAudioError | None = None
+    for attempt in range(STREAM_OPEN_RETRY_ATTEMPTS):
+        try:
+            return factory()
+        except sd.PortAudioError as e:
+            last_error = e
+            if attempt < STREAM_OPEN_RETRY_ATTEMPTS - 1:
+                await asyncio.sleep(STREAM_OPEN_RETRY_DELAY_SECONDS)
+    raise last_error
+
+
 def probe_audio_file(path: str | Path) -> None:
     """Quick validity check for a file picked as a translation source --
     opens/demuxes it without decoding, so a corrupt or non-audio file is
@@ -298,7 +322,7 @@ class MicStream:
         self._stream.stop()
         self._stream.close()
 
-    def switch_device(self, new_device: int | None) -> None:
+    async def switch_device(self, new_device: int | None) -> None:
         """Swaps to a different physical input device without disturbing
         chunks()'s already-running pacing loop: it only ever reads from
         self._q, filled by the same self._on_audio callback regardless of
@@ -312,11 +336,30 @@ class MicStream:
         our fixed sample rate) leaves the working old stream untouched
         instead of leaving the session without any mic at all.
 
+        Async (unlike _open_stream(), used for the initial device open):
+        this runs while TranslationRunner.run()'s event loop is already
+        pumping other coroutines (the receive loop, feed()), so retrying a
+        flaky open must yield control between attempts (see
+        _open_with_retry_async) instead of blocking the whole loop with
+        time.sleep() for up to ~4s -- a real gap a production trace showed
+        (the receive loop and feed() both stalling for the full retry
+        budget on every mic switch that hit a transient PortAudio error).
+
         Must be called from the thread that originally opened this
         MicStream (SessionWorker's background thread, which has COM
-        initialized on Windows for WASAPI -- see SessionWorker.start()).
+        initialized on Windows for WASAPI -- see SessionWorker.start()) --
+        awaiting this coroutine keeps it on that same thread, since it's
+        driven by that thread's own event loop, not offloaded to a
+        different one (which would need its own COM initialization).
         """
-        new_stream = self._open_stream(new_device)
+        new_stream = await _open_with_retry_async(lambda: sd.RawInputStream(
+            samplerate=RATE,
+            channels=CHANNELS,
+            dtype="int16",
+            device=new_device,
+            callback=self._on_audio,
+            extra_settings=_wasapi_extra_settings(),
+        ))
         new_stream.start()
         old_stream = self._stream
         self._stream = new_stream
@@ -625,8 +668,8 @@ class MixedSource:
         if self._file is not None:
             self._file.seek(position_ms)
 
-    def switch_device(self, new_device: int | None) -> None:
-        self._mic.switch_device(new_device)
+    async def switch_device(self, new_device: int | None) -> None:
+        await self._mic.switch_device(new_device)
 
     @property
     def mic_level(self) -> float:

@@ -596,6 +596,13 @@ _STATE_LABELS = {
 # so this is deliberately approximate, not authoritative.
 PALABRA_COST_PER_MINUTE_USD = 0.04
 
+# See _update_position()'s use of _file_swap_baseline_total_ms: how long to
+# wait for total_ms to actually change (confirming a live file swap landed)
+# before giving up and re-enabling the controls anyway. Bounded so a file
+# that coincidentally has the exact same duration as the one it replaced
+# can't leave the slider/skip buttons stuck disabled forever.
+FILE_SWAP_TIMEOUT_SECONDS = 3.0
+
 
 def _estimated_cost(seconds: float) -> float:
     return (seconds / 60) * PALABRA_COST_PER_MINUTE_USD
@@ -949,6 +956,21 @@ class MainWindow(QMainWindow):
         self._file_paused = False
         self._mic_muted = False
         self._pause_request_pending = False
+        # A live file swap/clear mid-session (see _choose_file/_on_clear_file)
+        # is fire-and-forget -- SessionWorker.set_file() only queues the
+        # actual swap onto TranslationRunner's own loop, so self._worker.
+        # total_ms/position_ms keep reporting the OLD file's numbers for a
+        # little while after the request. _update_position()'s only signal
+        # for "has the swap landed" was "total_ms > 0", true for the old
+        # file too -- so a slow swap (e.g. _request_lock briefly held by a
+        # concurrent seek/voice-change) could re-enable the slider/skip
+        # buttons against stale data. These two remember what total_ms was
+        # right before the swap was requested, so _update_position can wait
+        # for it to actually change (with a bounded timeout so a genuine
+        # same-duration coincidence can't leave the controls stuck disabled
+        # forever -- see _update_position()).
+        self._file_swap_baseline_total_ms: float | None = None
+        self._file_swap_pending_since: float | None = None
         self._partial_line_active = False  # last log line is a growing, not-yet-final transcript
         # Billable session time (see _on_state): accumulates only while the
         # server-side session is actually RUNNING, not during Pauza -- matches
@@ -1252,6 +1274,8 @@ class MainWindow(QMainWindow):
             self.file_pause_btn.setEnabled(True)
             self.position_slider.setEnabled(False)
             self._set_skip_buttons_enabled(False)
+            self._file_swap_baseline_total_ms = self._worker.total_ms
+            self._file_swap_pending_since = time.monotonic()
             self._position_timer.start()
             self._worker.set_file(path)
 
@@ -1266,6 +1290,9 @@ class MainWindow(QMainWindow):
         self._set_skip_buttons_enabled(False)
         self.position_slider.setValue(0)
         self.position_label.setText("00:00 / 00:00")
+        self._file_swap_baseline_total_ms = None
+        self._file_swap_pending_since = None
+        self._position_timer.stop()  # no file left to track -- avoid a stale-total_ms re-enable while hidden
         self.file_pause_btn.setVisible(False)
         self.file_pause_btn.setEnabled(False)
         self._file_paused = False
@@ -1442,6 +1469,14 @@ class MainWindow(QMainWindow):
         if state == SessionState.PAUSED:
             self._is_paused = True
             self.pause_btn.setText(tr("Wznów"))
+            # Also re-enables it (not just RUNNING does): a reconnect landing
+            # while the user had the session paused reports PAUSED directly
+            # (see TranslationRunner.run()'s _paused_by_user branch) without
+            # ever passing through RUNNING first -- RECONNECTING disables
+            # this button, and without re-enabling it here too, it stayed
+            # disabled forever with no way left to resume (F6 is guarded by
+            # this same isEnabled() check, so it couldn't rescue this either).
+            self.pause_btn.setEnabled(True)
         elif state == SessionState.RUNNING:
             self._is_paused = False
             self.pause_btn.setText(tr("Pauza"))
@@ -1554,6 +1589,23 @@ class MainWindow(QMainWindow):
         if total <= 0:
             return  # file not decoded yet
         if not self.position_slider.isEnabled():
+            if (
+                self._file_swap_baseline_total_ms is not None
+                and total == self._file_swap_baseline_total_ms
+                and self._file_swap_pending_since is not None
+                and time.monotonic() - self._file_swap_pending_since < FILE_SWAP_TIMEOUT_SECONDS
+            ):
+                # A file swap/clear was just requested (see _choose_file())
+                # but SessionWorker.set_file() is fire-and-forget -- total_ms
+                # hasn't changed from what it was right before the request,
+                # so the swap hasn't actually landed in TranslationRunner yet
+                # (still the OLD file's numbers). Wait for it instead of
+                # re-enabling the controls against stale data; the timeout
+                # above prevents this from waiting forever if the new file
+                # genuinely happens to have the same duration as the old one.
+                return
+            self._file_swap_baseline_total_ms = None
+            self._file_swap_pending_since = None
             self.position_slider.setEnabled(True)
             self._set_skip_buttons_enabled(True)
             self.position_slider.setRange(0, int(total))
