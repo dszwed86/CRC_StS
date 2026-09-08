@@ -964,6 +964,17 @@ class MainWindow(QMainWindow):
         self._level_timer.timeout.connect(self._update_level_meter)
         self._level_timer.timeout.connect(self._update_session_display)
 
+        # Unlike the two timers above, this one runs continuously from
+        # startup (not started/stopped around a session) -- it's the
+        # periodic, silent version of the "Odśwież urządzenia" button
+        # (see _auto_refresh_devices), picking up a plugged-in/unplugged
+        # mic or headset while idle without the user needing to click
+        # anything or restart the app.
+        self._device_refresh_timer = QTimer(self)
+        self._device_refresh_timer.setInterval(3000)
+        self._device_refresh_timer.timeout.connect(self._auto_refresh_devices)
+        self._device_refresh_timer.start()
+
         self._is_paused = False
         self._file_paused = False
         self._mic_muted = False
@@ -1322,30 +1333,56 @@ class MainWindow(QMainWindow):
         self._balance_usd = config.load_balance()  # may have been edited/synced just now
 
     def _on_refresh_devices(self) -> None:
-        current_mic = self.mic_combo.currentData()
-        current_output = self.output_combo.currentData()
-
         rescan_devices()
 
-        self.mic_combo.clear()
-        self._input_devices = list_input_devices()
-        for d in self._input_devices:
-            self.mic_combo.addItem(d.name, d.index)
-        idx = self.mic_combo.findData(current_mic)
-        self.mic_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        current_mic = self.mic_combo.currentData()
+        new_input_devices = list_input_devices()
+        if new_input_devices != self._input_devices:
+            # Only actually touch the combo (clear + repopulate) when the
+            # device list changed -- rebuilding it on every call, even when
+            # nothing changed, is wasted work and a needless visual flicker
+            # now that this also runs automatically every few seconds (see
+            # _auto_refresh_devices), not just on an explicit button click.
+            self.mic_combo.clear()
+            self._input_devices = new_input_devices
+            for d in self._input_devices:
+                self.mic_combo.addItem(d.name, d.index)
+            idx = self.mic_combo.findData(current_mic)
+            self.mic_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
-        self.output_combo.clear()
-        self._output_devices = list_output_devices()
-        for d in self._output_devices:
-            self.output_combo.addItem(d.name, d.index)
-        idx = self.output_combo.findData(current_output)
-        if idx >= 0:
-            self.output_combo.setCurrentIndex(idx)
-        else:
-            cable = find_virtual_cable(self._output_devices)
-            if cable is not None:
-                self.output_combo.setCurrentIndex(self._output_devices.index(cable))
-        self.output_hint.setVisible(find_virtual_cable(self._output_devices) is None)
+        current_output = self.output_combo.currentData()
+        new_output_devices = list_output_devices()
+        if new_output_devices != self._output_devices:
+            self.output_combo.clear()
+            self._output_devices = new_output_devices
+            for d in self._output_devices:
+                self.output_combo.addItem(d.name, d.index)
+            idx = self.output_combo.findData(current_output)
+            if idx >= 0:
+                self.output_combo.setCurrentIndex(idx)
+            else:
+                cable = find_virtual_cable(self._output_devices)
+                if cable is not None:
+                    self.output_combo.setCurrentIndex(self._output_devices.index(cable))
+            self.output_hint.setVisible(find_virtual_cable(self._output_devices) is None)
+
+    def _auto_refresh_devices(self) -> None:
+        """Periodic, silent version of _on_refresh_devices() -- picks up a
+        mic/headset plugged in or unplugged while idle, without the user
+        needing to click "Odśwież urządzenia" or restart the app.
+
+        Guarded to only run when no session is active: rescan_devices()
+        itself is only safe to call while no PortAudio stream is open (see
+        its own docstring) -- exactly why refresh_devices_btn is already
+        disabled during a running session (see _config_widgets). A session
+        starting or stopping mid-tick isn't a race worth guarding further:
+        the check below runs on the same GUI thread as _on_start_stop, so
+        there's no window for self._worker to change between the check and
+        rescan_devices() actually running.
+        """
+        if self._worker is not None:
+            return
+        self._on_refresh_devices()
 
     def _on_mic_gain_changed(self, value: int) -> None:
         self.mic_gain_label.setText(f"{value}%")
