@@ -40,13 +40,18 @@ from .i18n import tr
 # AuthError/TaskError are never retried: a bad key or a rejected command
 # won't fix itself by reconnecting, so failing fast matches today's
 # behavior for those.
-RECONNECT_MAX_ATTEMPTS = 3
+#
+# Retries are UNBOUNDED: run() keeps reconnecting on any of the three
+# above until either a connection succeeds or the user presses Stop --
+# per explicit product decision, a translator that gives up on its own
+# after a few attempts is worse than one that keeps trying through a
+# rough patch of network and lets the user decide when to abandon it.
 RECONNECT_BACKOFF_SECONDS = (2.0, 5.0, 10.0)
 # A connection must stay up this long before a later drop resets the retry
-# budget -- otherwise a server that accepts the connection but drops it
-# again almost immediately (flapping) would reset the counter on every
-# single attempt and never actually exhaust it, defeating the whole point
-# of a bounded retry budget.
+# counter back to the SHORT end of the backoff schedule -- otherwise a
+# server that accepts the connection but drops it again almost immediately
+# (flapping) would keep resetting to the short delay on every attempt
+# instead of properly backing off further and further.
 RECONNECT_STABLE_SECONDS = 10.0
 
 
@@ -434,10 +439,11 @@ class TranslationRunner:
         return enter_task.result()
 
     async def run(self) -> None:
-        """Runs the session, auto-reconnecting up to RECONNECT_MAX_ATTEMPTS
-        times (with growing backoff) on a dropped connection -- see
-        RECONNECT_MAX_ATTEMPTS's comment for exactly which failures qualify.
-        Audio spoken during a reconnect gap is NOT buffered/replayed: the
+        """Runs the session, auto-reconnecting indefinitely (with growing
+        backoff, see RECONNECT_BACKOFF_SECONDS) on a dropped connection until
+        either a connection succeeds or the user presses Stop -- see
+        RECONNECT_BACKOFF_SECONDS's comment for exactly which failures
+        qualify. Audio spoken during a reconnect gap is NOT buffered/replayed: the
         source (mic/file) keeps advancing in real time regardless, so
         whatever was "said" during the gap is simply never sent -- picking
         the session back up live once reconnected, rather than risking a
@@ -666,9 +672,10 @@ class TranslationRunner:
             assert connection_dropped  # every path above either returned or set this
             if connected_at is not None and time.monotonic() - connected_at >= RECONNECT_STABLE_SECONDS:
                 # This connection held up for a real while before dropping
-                # again -- treat it as a fresh, independent outage rather
-                # than continuing to spend the same budget a much earlier
-                # (possibly unrelated) blip already started using up.
+                # again -- treat it as a fresh, independent outage and
+                # restart the backoff schedule from its short end, rather
+                # than continuing on from wherever a much earlier (possibly
+                # unrelated) blip had left the counter.
                 attempt = 0
             if self._stop.is_set():
                 # The drop was detected exactly while (or after) the user
@@ -677,10 +684,11 @@ class TranslationRunner:
                 # still succeeded; report it as such instead of ERROR.
                 self._on_state(SessionState.STOPPED)
                 return
-            if attempt >= RECONNECT_MAX_ATTEMPTS:
-                self._on_error(f"{tr('Błąd')}: {drop_message}")
-                self._on_state(SessionState.ERROR)
-                return
+            # No attempt cap: retries are unbounded (see RECONNECT_BACKOFF_
+            # SECONDS's comment) -- this loop keeps going until either a
+            # connection succeeds or self._stop is set (checked above and in
+            # the backoff wait below), never giving up and reporting ERROR
+            # on its own for a dropped connection.
             backoff = RECONNECT_BACKOFF_SECONDS[min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)]
             attempt += 1
             # Fire RECONNECTING now, not just at the top of the next loop
@@ -693,7 +701,7 @@ class TranslationRunner:
             self._on_state(SessionState.RECONNECTING)
             self._on_error(
                 f"{tr('Połączenie przerwane')} ({drop_message}) -- {tr('ponawiam próbę')} "
-                f"{attempt}/{RECONNECT_MAX_ATTEMPTS} {tr('za')} {backoff:.0f}s..."
+                f"{attempt} {tr('za')} {backoff:.0f}s..."
             )
             elapsed = 0.0
             while elapsed < backoff:

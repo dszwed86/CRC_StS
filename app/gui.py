@@ -16,7 +16,7 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QTextBlock, QTextCursor
+from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QShortcut, QTextBlock, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -956,6 +956,11 @@ class MainWindow(QMainWindow):
         self._file_paused = False
         self._mic_muted = False
         self._pause_request_pending = False
+        # Tracks the last state _on_state() received, so _on_error() can
+        # tell a reconnect-attempt announcement (fired right after
+        # RECONNECTING, see TranslationRunner.run()) apart from any other
+        # error message, without depending on the message text itself.
+        self._current_session_state: SessionState | None = None
         # A live file swap/clear mid-session (see _choose_file/_on_clear_file)
         # is fire-and-forget -- SessionWorker.set_file() only queues the
         # actual swap onto TranslationRunner's own loop, so self._worker.
@@ -1456,7 +1461,13 @@ class MainWindow(QMainWindow):
 
     def _on_state(self, state: SessionState) -> None:
         self._pause_request_pending = False
+        self._current_session_state = state
         self.status_label.setText(tr(_STATE_LABELS.get(state, str(state))))
+        # Reconnecting is the one state that needs to visibly stand out (see
+        # _on_error()'s matching color for the announcement itself, in the
+        # main window only -- never on the overlay, which only ever shows
+        # transcripts) -- everything else uses the label's normal color.
+        self.status_label.setStyleSheet("color: #b02a2a; font-weight: bold;" if state == SessionState.RECONNECTING else "")
         if state == SessionState.RUNNING:
             if self._session_running_since is None:
                 self._session_running_since = time.monotonic()
@@ -1694,7 +1705,7 @@ class MainWindow(QMainWindow):
         if self._partial_line_active:
             self._replace_last_log_line(text)
         else:
-            self.log.appendPlainText(text)
+            self._append_log_line(text)
         # A growing (non-final) line keeps getting replaced in place; once final,
         # the NEXT event (e.g. the translation) must start its own new line.
         self._partial_line_active = not event.is_final
@@ -1786,8 +1797,37 @@ class MainWindow(QMainWindow):
         self._partial_line_active = False  # don't let a later partial transcript overwrite this line
         self._log_repeat_state = {True: (None, 0), False: (None, 0)}
         self._log_repeat_block = {True: None, False: None}
-        self.log.appendPlainText(message)
+        # A reconnect-attempt announcement (TranslationRunner.run() always
+        # fires on_state(RECONNECTING) immediately before this) gets a red
+        # line in the main window's log, matching status_label's own color
+        # while reconnecting -- never on the overlay, which never receives
+        # error messages at all (only on_transcript). Anything else (a real
+        # error, a warning, ...) stays the log's normal color.
+        color = "#b02a2a" if self._current_session_state == SessionState.RECONNECTING else None
+        self._append_log_line(message, color)
         config.log_error(message)
+
+    def _append_log_line(self, text: str, color: str | None = None) -> None:
+        # The ONE place that appends a new line to self.log -- used by both
+        # _place_log_line() (transcripts) and _on_error() (including the red
+        # reconnect announcements), instead of QPlainTextEdit.appendPlainText()
+        # directly: that method's format inheritance for whatever gets
+        # appended NEXT turned out to be inconsistent in practice (confirmed
+        # by testing) -- sometimes a previously-colored line bled its color
+        # into the next one appended, sometimes not, seemingly depending on
+        # what ran in between. Every insertion here states its own format
+        # explicitly (None -> the widget's normal/default color) so a
+        # colored line can never leak into whatever follows it.
+        cursor = QTextCursor(self.log.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self.log.document().isEmpty():
+            cursor.insertBlock()
+        fmt = QTextCharFormat()
+        if color is not None:
+            fmt.setForeground(QColor(color))
+        cursor.insertText(text, fmt)
+        self.log.setTextCursor(cursor)
+        self.log.ensureCursorVisible()
 
     def _on_toggle_overlay(self) -> None:
         if self._overlay is None:
