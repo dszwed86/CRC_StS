@@ -651,9 +651,10 @@ class MixedSource:
     across a whole-session pause()/resume() cycle, and vice versa.
     """
 
-    def __init__(self, mic: MicStream, file: FileStream | None = None):
+    def __init__(self, mic: MicStream, file: FileStream | None = None, on_error: Callable[[str], None] = lambda e: None):
         self._mic = mic
         self._file = file
+        self._on_error = on_error
         # Small bound: both sub-sources already self-pace to ~1 chunk per
         # CHUNK_MS, so these stay near-empty in steady state -- this is just
         # a safety cap against unbounded growth if either stalls, not a
@@ -719,25 +720,54 @@ class MixedSource:
     def total_ms(self) -> float:
         return self._file.total_ms if self._file is not None else 0.0
 
-    async def _pump(self, source: MicStream | FileStream, q: asyncio.Queue[bytes]) -> None:
-        async for chunk in source.chunks():
-            if len(chunk) < CHUNK_BYTES:
-                # FileStream's very last chunk before EOF can be shorter than
-                # CHUNK_BYTES (whatever's left in the file) -- pad it so
-                # _mix_pcm always sees two equal-length buffers, same as
-                # every other chunk. MicStream itself never yields a short
-                # chunk, but padding here rather than assuming that keeps
-                # this pump correct regardless of the source.
-                chunk = chunk + bytes(CHUNK_BYTES - len(chunk))
-            try:
-                q.put_nowait(chunk)
-            except asyncio.QueueFull:
-                # Drop the oldest rather than the newest to stay close to
-                # real time if something briefly falls behind -- matches
-                # MicStream's own backlog-capping rationale.
-                with contextlib.suppress(asyncio.QueueEmpty):
-                    q.get_nowait()
-                q.put_nowait(chunk)
+    async def _pump(self, source: MicStream | FileStream, q: asyncio.Queue[bytes], *, is_file: bool) -> None:
+        try:
+            async for chunk in source.chunks():
+                if len(chunk) < CHUNK_BYTES:
+                    # FileStream's very last chunk before EOF can be shorter than
+                    # CHUNK_BYTES (whatever's left in the file) -- pad it so
+                    # _mix_pcm always sees two equal-length buffers, same as
+                    # every other chunk. MicStream itself never yields a short
+                    # chunk, but padding here rather than assuming that keeps
+                    # this pump correct regardless of the source.
+                    chunk = chunk + bytes(CHUNK_BYTES - len(chunk))
+                try:
+                    q.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    # Drop the oldest rather than the newest to stay close to
+                    # real time if something briefly falls behind -- matches
+                    # MicStream's own backlog-capping rationale.
+                    with contextlib.suppress(asyncio.QueueEmpty):
+                        q.get_nowait()
+                    q.put_nowait(chunk)
+        except asyncio.CancelledError:
+            raise  # normal teardown path (chunks()'s finally / set_file()) -- not a real failure
+        except Exception as e:
+            # Without this, a real failure here (confirmed reachable:
+            # FileStream.chunks() re-raises self._decode_error if load_pcm()
+            # fails on a file that passed the lighter demux-only probe_audio_file()
+            # check but can't actually be fully decoded) was a task exception
+            # NEVER retrieved by anyone -- chunks()'s own consumer loop only
+            # ever does q.get_nowait()/falls back to silence, it never checks
+            # whether the pump feeding that queue is even still alive. The
+            # mixed session would just go silent for that source with no
+            # error shown, indistinguishable from genuine silence.
+            message = tr("Błąd odczytu pliku") if is_file else tr("Błąd odczytu mikrofonu")
+            self._on_error(f"{message}: {e}")
+            if is_file:
+                # Drop the broken file from the mix (same cleanup set_file()
+                # does) so the rest of the session -- the mic -- keeps going
+                # instead of silently losing the file's contribution for the
+                # rest of the session with no way to recover short of Stop.
+                # Safe against set_file()/chunks()'s own cleanup racing this:
+                # both already serialize through self._file_lock, and this
+                # only runs on a genuine failure (re-raised CancelledError
+                # above means an in-progress .cancel() never reaches here).
+                async with self._file_lock:
+                    if self._file is not None:
+                        self._file.__exit__(None, None, None)
+                        self._file = None
+                    self._file_task = None
 
     async def chunks(self) -> AsyncIterator[bytes]:
         """Yields fixed-size 320 ms PCM chunks mixed from both sub-sources,
@@ -751,12 +781,12 @@ class MixedSource:
         file would stall the live mic side too, which is exactly what
         pause_file() must NOT do.
         """
-        mic_task = asyncio.create_task(self._pump(self._mic, self._mic_q))
+        mic_task = asyncio.create_task(self._pump(self._mic, self._mic_q, is_file=False))
         if self._file is not None and self._file_task is None:
             # set_file() may have already started a pump task before chunks()
             # was ever iterated (e.g. a file picked while the session was
             # still connecting) -- don't overwrite it and orphan it.
-            self._file_task = asyncio.create_task(self._pump(self._file, self._file_q))
+            self._file_task = asyncio.create_task(self._pump(self._file, self._file_q, is_file=True))
         silence = bytes(CHUNK_BYTES)
         pacer = RealtimePacer(CHUNK_MS)
         try:
@@ -835,7 +865,7 @@ class MixedSource:
             self._file = file
             if file is not None:
                 file.__enter__()
-                self._file_task = asyncio.create_task(self._pump(self._file, self._file_q))
+                self._file_task = asyncio.create_task(self._pump(self._file, self._file_q, is_file=True))
 
 
 class OutputSink:

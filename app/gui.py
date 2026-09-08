@@ -473,7 +473,7 @@ class SessionWorker(QObject):
             if self._file_path is not None:
                 file = FileStream(self._file_path)
                 file.pause()  # never autoplay a file that's active at Start
-            source_cm = MixedSource(mic, file)
+            source_cm = MixedSource(mic, file, on_error=self.error_occurred.emit)
             self._mixed_source = source_cm
             with source_cm as source, OutputSink(device=self._output_device) as sink:
                 self._sink = sink
@@ -1764,12 +1764,23 @@ class MainWindow(QMainWindow):
             self._log_repeat_block[kind] = self.log.document().lastBlock()
 
     def _remove_last_log_block(self) -> None:
+        # BlockUnderCursor on the document's LAST block (this is always
+        # called right after moving to End, so it always is) already
+        # includes the paragraph separator BEFORE it in the selection --
+        # confirmed directly (selectedText() starts with U+2029). A
+        # trailing cursor.deletePreviousChar() here used to assume that
+        # separator still needed removing separately (true for a block
+        # that ISN'T the last one, see _place_log_line's own comment on
+        # BlockUnderCursor -- but that's the opposite end), so it deleted
+        # one character too many: the last character of whatever
+        # unrelated line preceded this one. Confirmed as a real,
+        # reproducible corruption of both the live log and (since
+        # _on_save_transcript() saves log.toPlainText() verbatim) any
+        # saved transcript.
         cursor = self.log.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
         cursor.removeSelectedText()
-        if not cursor.atStart():
-            cursor.deletePreviousChar()  # removes the now-dangling preceding newline
 
     def _event_passes_log_filter(self, event: TranscriptEvent) -> bool:
         filter_mode = self.log_filter_combo.currentData()

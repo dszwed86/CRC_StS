@@ -482,6 +482,15 @@ class TranslationRunner:
         like a dropped connection and reconnect.
         """
         attempt = 0
+        # See _is_auth_rejection()'s use below: requires the SAME rejection
+        # to repeat before concluding it's a real bad key/exhausted balance
+        # rather than failing fast on a single 401/403 -- a proxy/WAF/rate
+        # limiter in front of the API could plausibly answer a legitimate
+        # reconnect attempt (now unbounded, see RECONNECT_BACKOFF_SECONDS's
+        # comment) with a 401/403 of its own during a rough patch of
+        # network, and that single transient response looks identical to a
+        # real auth failure with no way to tell them apart otherwise.
+        consecutive_auth_rejections = 0
         while True:
             self._on_state(SessionState.RECONNECTING if attempt > 0 else SessionState.CONNECTING)
             connection_dropped = False
@@ -534,6 +543,7 @@ class TranslationRunner:
                     stack.push_async_exit(ctx)
                     self._session = session
                     connected_at = time.monotonic()
+                    consecutive_auth_rejections = 0  # the key just got accepted -- it's not the problem
                     async with self._request_lock:
                         # Re-check _paused_by_user only AFTER acquiring the
                         # lock, not before: a request_resume()/request_pause()
@@ -667,15 +677,23 @@ class TranslationRunner:
                 drop_message = tr("połączenie zostało zerwane")
             except (SessionError, NotReadyError, websockets.exceptions.ConnectionClosed) as e:
                 if isinstance(e, SessionError) and _is_auth_rejection(e):
-                    # Not a transient blip -- retrying forever (as of the
-                    # unbounded-retry change above) would spam "ponawiam
-                    # próbę" indistinguishable from a rough patch of network,
-                    # while a wrong/expired key or an exhausted balance will
-                    # never recover on its own. Fail fast instead, same as
-                    # AuthError/TaskError below.
-                    self._on_error(f"{tr('Błąd uwierzytelniania')}: {e}")
-                    self._on_state(SessionState.STOPPED if self._stop.is_set() else SessionState.ERROR)
-                    return
+                    consecutive_auth_rejections += 1
+                    if consecutive_auth_rejections >= 2:
+                        # Two in a row, no successful connect in between --
+                        # not a transient blip. Retrying forever (as of the
+                        # unbounded-retry change above) would spam "ponawiam
+                        # próbę" indistinguishable from a rough patch of
+                        # network, while a wrong/expired key or an exhausted
+                        # balance will never recover on its own. Fail fast
+                        # instead, same as AuthError/TaskError below.
+                        self._on_error(f"{tr('Błąd uwierzytelniania')}: {e}")
+                        self._on_state(SessionState.STOPPED if self._stop.is_set() else SessionState.ERROR)
+                        return
+                    # First occurrence -- could be a real bad key, or could
+                    # be a proxy/rate-limiter hiccup (see the comment on
+                    # consecutive_auth_rejections above). Treat it like an
+                    # ordinary drop for now; a genuine bad key will simply
+                    # produce the same rejection again next attempt.
                 connection_dropped = True
                 drop_message = str(e)
             except PalabraError as e:

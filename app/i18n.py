@@ -25,6 +25,8 @@ _TRANSLATIONS: dict[str, str] = {
     "Brak transkrypcji": "No transcript",
     "Brak urządzenia wyjściowego": "No output device",
     "Błąd": "Error",
+    "Błąd odczytu mikrofonu": "Microphone read error",
+    "Błąd odczytu pliku": "File read error",
     "Błąd połączenia": "Connection error",
     "Błąd serwera": "Server error",
     "Błąd testu wyjścia": "Output test error",
