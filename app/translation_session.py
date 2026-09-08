@@ -55,6 +55,22 @@ RECONNECT_BACKOFF_SECONDS = (2.0, 5.0, 10.0)
 RECONNECT_STABLE_SECONDS = 10.0
 
 
+def _is_auth_rejection(exc: BaseException) -> bool:
+    """True if exc is a SessionError wrapping a WebSocket handshake that was
+    rejected with HTTP 401/403 (see palabra_ai's client.py: any connect
+    failure -- `websockets.connect()` raising -- is wrapped as
+    `raise SessionError(...) from e`, so the original cause survives as
+    `__cause__`). This is a bad/expired/revoked API key or an exhausted
+    account balance, confirmed via a real test against the API -- none of
+    which will ever fix itself by retrying, unlike a genuine dropped
+    connection. The SDK's own AuthError is NOT raised for this case (only
+    for a missing key entirely, see client.py) -- a rejected key surfaces
+    exactly the same way a network blip would, which is why this needs an
+    explicit check rather than relying on exception type alone."""
+    cause = exc.__cause__
+    return isinstance(cause, websockets.exceptions.InvalidStatus) and cause.response.status_code in (401, 403)
+
+
 class AudioSource(Protocol):
     def chunks(self): ...  # async generator[bytes]
 
@@ -650,6 +666,16 @@ class TranslationRunner:
                 connection_dropped = True
                 drop_message = tr("połączenie zostało zerwane")
             except (SessionError, NotReadyError, websockets.exceptions.ConnectionClosed) as e:
+                if isinstance(e, SessionError) and _is_auth_rejection(e):
+                    # Not a transient blip -- retrying forever (as of the
+                    # unbounded-retry change above) would spam "ponawiam
+                    # próbę" indistinguishable from a rough patch of network,
+                    # while a wrong/expired key or an exhausted balance will
+                    # never recover on its own. Fail fast instead, same as
+                    # AuthError/TaskError below.
+                    self._on_error(f"{tr('Błąd uwierzytelniania')}: {e}")
+                    self._on_state(SessionState.STOPPED if self._stop.is_set() else SessionState.ERROR)
+                    return
                 connection_dropped = True
                 drop_message = str(e)
             except PalabraError as e:

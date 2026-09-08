@@ -29,6 +29,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Błąd serwera": "Server error",
     "Błąd testu wyjścia": "Output test error",
     "Błąd urządzenia audio": "Audio device error",
+    "Błąd uwierzytelniania": "Authentication error",
     "Błąd zapisu": "Save error",
     "Cień pod tekstem": "Text shadow",
     "Czcionka:": "Font:",

@@ -603,6 +603,18 @@ PALABRA_COST_PER_MINUTE_USD = 0.04
 # can't leave the slider/skip buttons stuck disabled forever.
 FILE_SWAP_TIMEOUT_SECONDS = 3.0
 
+# See _on_transcript()'s use of _transcript_history: how many past
+# transcript events (source + translation) are kept for the log
+# filter/tag toggle to re-render from (see _rebuild_log) and for a
+# newly-opened overlay to backfill from. A TranscriptEvent is tiny (a
+# short string + a couple of floats/bools), so keeping a full heavy
+# workday's worth of them (measured: ~2,000/hour of continuous speech)
+# costs a few MB, not the hundreds of MB the log's own QPlainTextEdit
+# widget uses per line -- generous on purpose, since the old cap of 300
+# meant switching the log filter mid-session silently discarded almost
+# all of a long session's transcript.
+MAX_TRANSCRIPT_HISTORY_ENTRIES = 20_000
+
 
 def _estimated_cost(seconds: float) -> float:
     return (seconds / 60) * PALABRA_COST_PER_MINUTE_USD
@@ -1658,10 +1670,10 @@ class MainWindow(QMainWindow):
         # Kept so a newly-opened overlay can be backfilled (see _open_overlay)
         # instead of starting empty if it's opened mid-session, and so the log
         # filter/tag toggles can retroactively re-render already-shown lines
-        # (see _rebuild_log). Capped since a long session could otherwise
-        # accumulate an unbounded list.
+        # (see _rebuild_log). Capped (see MAX_TRANSCRIPT_HISTORY_ENTRIES)
+        # since a long session could otherwise accumulate an unbounded list.
         self._transcript_history.append(event)
-        del self._transcript_history[:-300]
+        del self._transcript_history[:-MAX_TRANSCRIPT_HISTORY_ENTRIES]
         if self._overlay is not None:
             self._overlay.on_transcript(event)  # overlay applies its own, independent filter
         if not self._event_passes_log_filter(event):
@@ -1818,6 +1830,19 @@ class MainWindow(QMainWindow):
         # what ran in between. Every insertion here states its own format
         # explicitly (None -> the widget's normal/default color) so a
         # colored line can never leak into whatever follows it.
+        #
+        # Uses its OWN QTextCursor, entirely separate from self.log's own
+        # visible cursor/selection -- never calls setTextCursor() the way an
+        # earlier version of this did. That earlier version broke scrolling
+        # and text selection during a live session: every new line (arriving
+        # every 1-2s) forced the view to jump to the bottom and wiped
+        # whatever the user had selected, mid-copy. appendPlainText() itself
+        # never did that; matching it here means only auto-scrolling when
+        # the user was ALREADY at the bottom (so a live session still
+        # follows along by default), and leaving their view/selection alone
+        # otherwise.
+        scrollbar = self.log.verticalScrollBar()
+        was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 2
         cursor = QTextCursor(self.log.document())
         cursor.movePosition(QTextCursor.MoveOperation.End)
         if not self.log.document().isEmpty():
@@ -1826,8 +1851,8 @@ class MainWindow(QMainWindow):
         if color is not None:
             fmt.setForeground(QColor(color))
         cursor.insertText(text, fmt)
-        self.log.setTextCursor(cursor)
-        self.log.ensureCursorVisible()
+        if was_at_bottom:
+            scrollbar.setValue(scrollbar.maximum())
 
     def _on_toggle_overlay(self) -> None:
         if self._overlay is None:

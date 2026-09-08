@@ -34,6 +34,15 @@ MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
 MAX_OUTPUT_BACKLOG_SAMPLES = int(RATE * 1.2)  # ~1.2s -- see OutputSink.play()
 STREAM_OPEN_RETRY_ATTEMPTS = 5
 STREAM_OPEN_RETRY_DELAY_SECONDS = 1.0
+# See MicStream.level/OutputSink.level: a live PortAudio callback fires
+# continuously (every ~10-20ms for these buffer sizes) for as long as its
+# stream is genuinely alive, silence included -- if the device dies (a
+# laptop wakes from sleep before WASAPI has recovered, a USB
+# mic/interface/virtual-cable driver resets, a device is unplugged), the
+# callback simply stops firing. This threshold is generous slack above
+# the normal callback interval, so a real gap of this length reliably
+# means the stream is dead, not just briefly scheduled late.
+STREAM_STALE_SECONDS = 0.5
 
 _T = TypeVar("_T")
 
@@ -285,9 +294,23 @@ class MicStream:
         # being sent". Updated on the audio callback's own thread; a plain
         # float write/read is safe enough here (single writer, no torn
         # reads under the GIL), same reasoning as total_ms/position_ms
-        # elsewhere in this file.
-        self.level: float = 0.0
+        # elsewhere in this file. Exposed through the level property below,
+        # not read directly -- see its docstring for why.
+        self._level: float = 0.0
+        self._last_callback_at: float = time.monotonic()
         self._stream = self._open_stream(device)
+
+    @property
+    def level(self) -> float:
+        """Reports 0.0 if the audio callback hasn't fired in a while
+        (STREAM_STALE_SECONDS) instead of the last real reading -- a dead
+        stream (device unplugged, driver reset, laptop just woke from
+        sleep) otherwise leaves this frozen at whatever it last was,
+        making the GUI's meter look alive when nothing is actually being
+        captured."""
+        if time.monotonic() - self._last_callback_at > STREAM_STALE_SECONDS:
+            return 0.0
+        return self._level
 
     def _open_stream(self, device: int | None) -> sd.RawInputStream:
         return _open_with_retry(lambda: sd.RawInputStream(
@@ -300,11 +323,12 @@ class MicStream:
         ))
 
     def _on_audio(self, indata, frames, time_info, status) -> None:
+        self._last_callback_at = time.monotonic()
         data = bytes(indata)
         if data:
-            self.level = min(1.0, int(np.abs(np.frombuffer(data, dtype=np.int16)).max()) / 32767)
+            self._level = min(1.0, int(np.abs(np.frombuffer(data, dtype=np.int16)).max()) / 32767)
         else:
-            self.level = 0.0
+            self._level = 0.0
         try:
             self._q.put_nowait(data)
         except queue.Full:
@@ -826,8 +850,10 @@ class OutputSink:
         # counts as "not reaching the device"). Computed from outdata, the
         # ACTUAL samples handed to the audio driver each callback (silence
         # included), same "single writer, plain float" reasoning as
-        # MicStream.level.
-        self.level: float = 0.0
+        # MicStream.level. Exposed through the level property below, not
+        # read directly -- see its docstring for why.
+        self._level: float = 0.0
+        self._last_callback_at: float = time.monotonic()
         # Set from another thread by clear() (after a seek); only ever read/acted
         # on inside _on_playback, so self._buffer itself is written exclusively by
         # the realtime callback thread -- no lock needed. A lock here previously
@@ -843,7 +869,15 @@ class OutputSink:
             extra_settings=_wasapi_extra_settings(),
         ))
 
+    @property
+    def level(self) -> float:
+        """Same staleness handling as MicStream.level -- see its docstring."""
+        if time.monotonic() - self._last_callback_at > STREAM_STALE_SECONDS:
+            return 0.0
+        return self._level
+
     def _on_playback(self, outdata, frames, time_info, status) -> None:
+        self._last_callback_at = time.monotonic()
         if self._clear_requested.is_set():
             self._clear_requested.clear()
             self._buffer = np.zeros(0, dtype=np.int16)
@@ -859,7 +893,7 @@ class OutputSink:
             self._buffer = self._buffer[frames:]
         else:
             outdata.fill(0)
-        self.level = min(1.0, int(np.abs(outdata).max()) / 32767) if outdata.size else 0.0
+        self._level = min(1.0, int(np.abs(outdata).max()) / 32767) if outdata.size else 0.0
 
     def __enter__(self) -> "OutputSink":
         try:
