@@ -385,6 +385,21 @@ class TranslationRunner:
                     speech_gen["voice_id"] = voice_id
                 task["pipeline"]["translations"][0]["speech_generation"] = speech_gen
                 await self._session.set_task(task)
+                # Without this, a reconnect after a live voice change (see
+                # run()'s `self._palabra.translation(..., voice_id=self._voice_id,
+                # voice_cloning=self._voice_cloning, ...)`, which always builds
+                # the NEW session from these two fields, never from the old
+                # session's own mutated task) would silently revert to
+                # whichever voice was set at __init__ time.
+                self._voice_id = voice_id
+                self._voice_cloning = voice_cloning
+                if was_paused_by_user:
+                    # set_task() "also resumes after pause()" per the SDK's
+                    # own docstring -- without re-pausing here, changing
+                    # voice while paused silently resumed the server-side
+                    # task (and its billing) behind a GUI still showing
+                    # "Wstrzymano", with no way left to notice.
+                    await self._session.pause()
             except PalabraError as e:
                 self._on_error(f"{tr('Błąd')}: {e}")
             except Exception as e:
@@ -392,6 +407,31 @@ class TranslationRunner:
             finally:
                 if pausable and not was_paused_by_user:
                     self._source.resume()
+
+    async def _connect_or_stop(self, ctx):
+        """Awaits ctx.__aenter__(), racing it against self._stop.
+
+        Without this, a Stop click during the connect handshake (websocket
+        connect + up to the SDK's own READY_TIMEOUT=30s waiting for the
+        pipeline to confirm the task) was silently ignored -- run()'s only
+        other self._stop checks are inside feed()'s per-chunk loop and the
+        backoff wait, both of which only run once a session already exists.
+
+        Returns the connected session, or None if stop won the race. On
+        that path the in-flight __aenter__() is cancelled; TranslationSession
+        .__aenter__'s own `except BaseException: await self.close()` handles
+        cleaning up the half-open socket/receive task from that
+        cancellation, so nothing is leaked here.
+        """
+        enter_task = asyncio.create_task(ctx.__aenter__())
+        while not enter_task.done():
+            if self._stop.is_set():
+                enter_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await enter_task
+                return None
+            await asyncio.wait({enter_task}, timeout=0.2)
+        return enter_task.result()
 
     async def run(self) -> None:
         """Runs the session, auto-reconnecting up to RECONNECT_MAX_ATTEMPTS
@@ -426,7 +466,7 @@ class TranslationRunner:
             drop_message = ""
             connected_at: float | None = None
             try:
-                async with self._palabra.translation(
+                ctx = self._palabra.translation(
                     source=self._source_lang,
                     targets=[self._target_lang],
                     voice_id=self._voice_id,
@@ -440,25 +480,51 @@ class TranslationRunner:
                     # more than ~0.5s may see it split a bit eagerly.
                     translate_partials=True,
                     silence_threshold=0.5,
-                ) as session:
+                )
+                session = await self._connect_or_stop(ctx)
+                if session is None:
+                    # self._stop was set while still connecting -- see
+                    # _connect_or_stop's docstring.
+                    self._on_state(SessionState.STOPPED)
+                    return
+                async with contextlib.AsyncExitStack() as stack:
+                    # ctx.__aenter__() already ran (inside _connect_or_stop);
+                    # this registers its matching __aexit__() to run on the
+                    # way out, with the same exception-propagation contract
+                    # a plain `async with ctx as session:` would have given
+                    # -- we just needed the enter half to be cancellable.
+                    stack.push_async_exit(ctx)
                     self._session = session
                     connected_at = time.monotonic()
-                    if self._paused_by_user:
-                        # A reconnect landed while the user had this session
-                        # paused (see request_pause()/_do_pause()): the
-                        # source itself is still correctly blocked (its own
-                        # pause flag survives across reconnects, since
-                        # self._source is never recreated), but the freshly
-                        # (re)connected session doesn't know about that on
-                        # its own -- without this, the code below would
-                        # unconditionally report RUNNING, resetting the
-                        # GUI's Pauza button to "unpaused" while the source
-                        # stays silently, permanently stuck not feeding any
-                        # audio, with no way left to un-stick it.
-                        await session.pause()
-                        self._on_state(SessionState.PAUSED)
-                    else:
-                        self._on_state(SessionState.RUNNING)
+                    async with self._request_lock:
+                        # Re-check _paused_by_user only AFTER acquiring the
+                        # lock, not before: a request_resume()/request_pause()
+                        # queued via call_soon_threadsafe right as this
+                        # reconnect landed could otherwise race this
+                        # session.pause() call -- whichever finished last used
+                        # to silently win over the user's actual last click.
+                        # Every other place that touches
+                        # session.pause()/.resume()/.set_task() already goes
+                        # through this same lock (_do_pause/_do_resume/
+                        # _do_change_voice); this direct call was the one
+                        # left outside it.
+                        if self._paused_by_user:
+                            # A reconnect landed while the user had this
+                            # session paused (see request_pause()/_do_pause()):
+                            # the source itself is still correctly blocked
+                            # (its own pause flag survives across reconnects,
+                            # since self._source is never recreated), but the
+                            # freshly (re)connected session doesn't know about
+                            # that on its own -- without this, the code below
+                            # would unconditionally report RUNNING, resetting
+                            # the GUI's Pauza button to "unpaused" while the
+                            # source stays silently, permanently stuck not
+                            # feeding any audio, with no way left to un-stick
+                            # it.
+                            await session.pause()
+                            self._on_state(SessionState.PAUSED)
+                        else:
+                            self._on_state(SessionState.RUNNING)
 
                     async def feed() -> None:
                         async for chunk in self._source.chunks():
