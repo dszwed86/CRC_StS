@@ -19,7 +19,7 @@ from enum import Enum, auto
 from typing import Protocol
 
 import websockets
-from palabra_ai import Audio, Palabra, Raw, ServerError, ServerWarning, Transcript
+from palabra_ai import Audio, Palabra, Raw, ServerError, ServerWarning, Transcript, build_task
 from palabra_ai.exc import NotReadyError, PalabraError, SessionError
 
 from .audio_io import FileStream
@@ -466,9 +466,9 @@ class TranslationRunner:
             drop_message = ""
             connected_at: float | None = None
             try:
-                ctx = self._palabra.translation(
-                    source=self._source_lang,
-                    targets=[self._target_lang],
+                task = build_task(
+                    self._source_lang,
+                    [self._target_lang],
                     voice_id=self._voice_id,
                     voice_cloning=self._voice_cloning,
                     # Lower perceived latency: translate partial (still-forming)
@@ -481,6 +481,22 @@ class TranslationRunner:
                     translate_partials=True,
                     silence_threshold=0.5,
                 )
+                # Widen the server's internal TTS output queue beyond
+                # build_task()'s implicit (tight) default -- not exposed as
+                # a build_task() kwarg, so set directly on the task dict.
+                # Measured via a real A/B test: the tight default compresses/
+                # speeds up generated speech to keep the queue shallow, and
+                # produced ~40% more simulated playback-buffer starvation
+                # than this wider target -- exactly the unstable, robotic
+                # timing this app has been fighting. Costs a bit more
+                # steady-state buffered latency in exchange. 2000/4000 is
+                # the server-enforced minimum for desired/max; auto_tempo
+                # left at its default since the same test found no measurable
+                # effect from it at this queue depth.
+                task["pipeline"]["translation_queue_configs"] = {
+                    "global": {"desired_queue_level_ms": 5000, "max_queue_level_ms": 9000}
+                }
+                ctx = self._palabra.translation(task=task)
                 session = await self._connect_or_stop(ctx)
                 if session is None:
                     # self._stop was set while still connecting -- see
