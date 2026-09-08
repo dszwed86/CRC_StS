@@ -503,6 +503,13 @@ class OverlaySettingsDialog(QDialog):
     def __init__(self, overlay: OverlayWindow, parent=None):
         super().__init__(parent)
         self._overlay = overlay
+        # Without this, repeatedly opening/closing the overlay (each cycle
+        # creating a fresh OverlayWindow, and on demand a fresh dialog via
+        # open_settings_dialog()'s per-instance dedup) leaves a trail of
+        # hidden, never-freed QDialog objects parented to MainWindow --
+        # closeEvent() below already clears the Python-side back-reference
+        # first, so the C++ object is safe to actually delete afterwards.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowTitle(tr("Ustawienia wyglądu"))
         # This dialog isn't always parented to the overlay (MainWindow's
         # "Ustawienia wyglądu overlay..." button parents it to itself instead,

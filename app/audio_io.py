@@ -499,7 +499,19 @@ class FileStream:
         # FileStream() call sites already have a loop running by construction
         # time anyway -- the point is decoupling decode from chunks() being
         # pumped, not from asyncio itself.
-        self._decode_done = threading.Event()
+        #
+        # Signaled via an asyncio.Event (set cross-thread with
+        # call_soon_threadsafe), not a threading.Event awaited through
+        # asyncio.to_thread(): that used to pin one of the default
+        # executor's worker threads, blocked in Event.wait(), for the WHOLE
+        # remaining decode duration whenever chunks() was cancelled early
+        # (e.g. a fast set_file() swap discarding this FileStream before its
+        # decode finished) -- since nothing else in this app uses
+        # asyncio.to_thread, that thread wasn't doing anything useful once
+        # abandoned, but stayed pinned regardless. An asyncio.Event's wait()
+        # is a plain, cheaply-cancellable coroutine await instead.
+        self._decode_done = asyncio.Event()
+        self._loop = asyncio.get_running_loop()
         self._pcm: bytes | None = None
         self._decode_error: Exception | None = None
         threading.Thread(target=self._decode, daemon=True).start()
@@ -512,7 +524,7 @@ class FileStream:
         except Exception as e:  # decode failure (corrupt file, codec issue, ...) -- surfaced later by chunks()
             self._decode_error = e
         finally:
-            self._decode_done.set()
+            self._loop.call_soon_threadsafe(self._decode_done.set)
 
     def __enter__(self) -> "FileStream":
         return self
@@ -530,7 +542,7 @@ class FileStream:
         self._seek_to_ms = max(0.0, min(position_ms, self.total_ms))
 
     async def chunks(self) -> AsyncIterator[bytes]:
-        await asyncio.to_thread(self._decode_done.wait)
+        await self._decode_done.wait()
         if self._decode_error is not None:
             raise self._decode_error
         pcm = self._pcm

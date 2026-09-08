@@ -210,6 +210,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Wybierz plik audio/wideo": "Choose an audio/video file",
     "Wybierz plik audio/wideo do przetłumaczenia.": "Choose an audio/video file to translate.",
     "Wybierz plik...": "Choose file...",
+    "Wycisz": "Mute",
     "Wycisza mikrofon bez zmiany ustawionej głośności (skrót: M).": (
         "Mutes the microphone without changing the set volume (shortcut: M)."
     ),

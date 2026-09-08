@@ -719,7 +719,7 @@ class MainWindow(QMainWindow):
         self.mic_gain_label = QLabel("100%")
         gain_row.addWidget(self.mic_gain_slider, stretch=1)
         gain_row.addWidget(self.mic_gain_label)
-        self.mic_mute_check = QCheckBox("Mute")
+        self.mic_mute_check = QCheckBox(tr("Wycisz"))
         self.mic_mute_check.setToolTip(tr("Wycisza mikrofon bez zmiany ustawionej głośności (skrót: M)."))
         self.mic_mute_check.toggled.connect(self._on_mic_mute_toggled)
         gain_row.addWidget(self.mic_mute_check)
@@ -1525,6 +1525,14 @@ class MainWindow(QMainWindow):
         self._set_skip_buttons_enabled(False)
         self.position_slider.setValue(0)
         self.position_label.setText("00:00 / 00:00")
+        # A file swap requested just before the session ended (Stop/error/
+        # natural end) could leave these set from _choose_file() with no
+        # worker left to ever land it -- same reset _on_clear_file() already
+        # does, needed here too so a NEW session started soon after doesn't
+        # inherit a stale baseline/timestamp from the previous one (see
+        # _update_position()'s use of them).
+        self._file_swap_baseline_total_ms = None
+        self._file_swap_pending_since = None
 
     def _on_pause_resume(self) -> None:
         # pause_btn.isEnabled() also covers SessionState.RECONNECTING (see

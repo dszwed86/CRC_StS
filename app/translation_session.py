@@ -527,10 +527,24 @@ class TranslationRunner:
                             self._on_state(SessionState.RUNNING)
 
                     async def feed() -> None:
-                        async for chunk in self._source.chunks():
-                            if self._stop.is_set():
-                                break
-                            await session.send_audio(chunk)
+                        # Explicitly closes the generator (async with
+                        # contextlib.aclosing) instead of just letting `break`/
+                        # cancellation abandon it: the source's chunks()
+                        # (MixedSource) spawns background pump tasks in its own
+                        # `finally:`, cleaned up only when aclose() actually
+                        # runs. Left implicit, that depended entirely on
+                        # CPython's refcounting + asyncio's asyncgen-finalizer
+                        # hook scheduling aclose() as a SEPARATE task with no
+                        # guarantee it gets a turn before this coroutine (and
+                        # the loop shutting down around it) moves on --
+                        # confirmed reproducible as a genuine "Task was
+                        # destroyed but it is pending!" leak when nothing else
+                        # happens to yield the loop enough turns afterward.
+                        async with contextlib.aclosing(self._source.chunks()) as gen:
+                            async for chunk in gen:
+                                if self._stop.is_set():
+                                    break
+                                await session.send_audio(chunk)
                         try:
                             await session.end(eos_timeout=4)
                         except TypeError:
