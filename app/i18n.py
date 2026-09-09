@@ -21,6 +21,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Brak aktywnego glosariusza dla tej pary językowej.": "No active glossary for this language pair.",
     "Brak błędów": "No errors",
     "Brak danych": "Missing data",
+    "Brak glosariuszy na koncie.": "No glossaries on the account.",
     "Brak klucza": "No key",
     "Brak klucza API": "No API key",
     "Brak pliku": "No file",
@@ -142,6 +143,7 @@ _TRANSLATIONS: dict[str, str] = {
         "a Palabra session, so no cost -- useful for checking that audio is actually "
         "reaching that device."
     ),
+    "Odśwież": "Refresh",
     "Odśwież urządzenia": "Refresh devices",
     "Ostrzeżenie": "Warning",
     "Otwiera ~/.sts_bridge/errors.log w domyślnym edytorze tekstu.": (
@@ -161,6 +163,13 @@ _TRANSLATIONS: dict[str, str] = {
     "Podaj nazwę i ID głosu.": "Enter a name and a voice ID.",
     "Podaj słowo źródłowe i jego tłumaczenie.": "Enter a source word and its translation.",
     "Podgląd tłumaczenia": "Translation preview",
+    "Pokazuje wszystkie glosariusze zapisane na koncie Palabra (nie tylko dla tej pary"
+    " językowej) i pozwala usunąć dowolny z nich -- przydatne, jeśli jakiś pozostał"
+    " aktywny mimo utraty lokalnego zapisu w tej aplikacji.": (
+        "Shows every glossary saved on the Palabra account (not just for this language"
+        " pair) and lets you delete any of them -- useful if one stayed active despite"
+        " losing the local record in this app."
+    ),
     "Pokaż w logu:": "Show in log:",
     "Pokaż:": "Show:",
     "Poziom dźwięku faktycznie odtwarzanego na wybrane wyjście, na żywo, w trakcie "
@@ -199,6 +208,7 @@ _TRANSLATIONS: dict[str, str] = {
         "resync."
     ),
     "Słowo źródłowe (np. Jehowa)": "Source word (e.g. Jehovah)",
+    "Tego nie można cofnąć.": "This cannot be undone.",
     "Testowanie...": "Testing...",
     "Testuj klucz": "Test key",
     "Testuj wyjście": "Test output",
@@ -211,17 +221,24 @@ _TRANSLATIONS: dict[str, str] = {
     "Ustaw klucz API w Ustawieniach przed zapisem glosariusza.": (
         "Set an API key in Settings before saving the glossary."
     ),
+    "Ustaw klucz API w Ustawieniach przed zarządzaniem glosariuszami.": (
+        "Set an API key in Settings before managing glossaries."
+    ),
     "Ustawienia": "Settings",
     "Ustawienia wyglądu": "Appearance settings",
     "Ustawienia wyglądu overlay...": "Overlay appearance settings...",
     "Ustawienia wyglądu...": "Appearance settings...",
     "Ustawienia...": "Settings...",
+    "Usunąć": "Delete",
     "Usunąć całą zapisaną historię sesji? Tego nie można cofnąć.": (
         "Delete the entire saved session history? This cannot be undone."
     ),
+    "Usunąć glosariusz?": "Delete glossary?",
+    "Usuwanie...": "Deleting...",
     "Usuń wybrany plik": "Remove the selected file",
     "Usuń zaznaczone": "Remove selected",
     "Usuń zaznaczony": "Remove selected",
+    "Wczytywanie...": "Loading...",
     "Wpisz klucz API przed testem.": "Enter an API key before testing.",
     "Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku. (F6)": (
         "Pauses/resumes the whole session (microphone and file, if any), "
@@ -231,6 +248,8 @@ _TRANSLATIONS: dict[str, str] = {
         "Pauses/resumes only the file -- the microphone and the rest of the "
         "session are unaffected."
     ),
+    "Wszystkie glosariusze na koncie": "All glossaries on the account",
+    "Wszystkie glosariusze na koncie...": "All glossaries on the account...",
     "Wszystkie pliki": "All files",
     "Wybierz plik audio/wideo": "Choose an audio/video file",
     "Wybierz plik audio/wideo do przetłumaczenia.": "Choose an audio/video file to translate.",
@@ -290,6 +309,8 @@ _TRANSLATIONS: dict[str, str] = {
     "sesji": "sessions",
     "transkrypcja.txt": "transcript.txt",
     "wymaga pakietu av: uv add av": "requires the av package: uv add av",
+    "włączony": "enabled",
+    "wyłączony": "disabled",
     "za": "in",
     "Źródło dźwięku": "Audio source",
     "wersja": "version",

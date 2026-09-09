@@ -262,40 +262,65 @@ def _glossary_key(source_lang: str, target_lang: str) -> str:
     return f"{source_lang}->{target_lang}"
 
 
-def load_glossary_entries(source_lang: str, target_lang: str) -> tuple[list[tuple[str, str]], str | None]:
-    """Reads the local word-pair list and last-synced glossary_id for one
-    language pair. Returns ([], None) if none saved yet, or the file is
-    missing/corrupt -- this is edited interactively (GlossaryDialog), so a
-    bad file should start the user from an empty list rather than block
-    the app."""
-    if not GLOSSARY_PATH.exists():
-        return [], None
-    try:
-        data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return [], None
-    if not isinstance(data, dict):
-        return [], None
-    entry = data.get(_glossary_key(source_lang, target_lang))
-    if not isinstance(entry, dict):
-        return [], None
-    raw_pairs = entry.get("pairs")
+def _parse_pairs(raw_pairs: Any) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     if isinstance(raw_pairs, list):
         for p in raw_pairs:
             if isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p):
                 pairs.append((p[0], p[1]))
+    return pairs
+
+
+# Sentinel for save_glossary_entries' synced_pairs param: distinguishes "leave
+# whatever was last recorded as synced untouched" (the default -- used by plain
+# local edits) from "explicitly set it" (None or a real list -- used after an
+# actual sync attempt), since None alone already means "synced list is empty".
+_UNSET = object()
+
+
+def load_glossary_entries(
+    source_lang: str, target_lang: str
+) -> tuple[list[tuple[str, str]], str | None, list[tuple[str, str]]]:
+    """Reads the local word-pair list, last-synced glossary_id, and the pair
+    list that was actually last pushed to Palabra (synced_pairs) for one
+    language pair -- the caller (GlossaryDialog) compares the local list
+    against synced_pairs to know whether it's showing unsaved changes,
+    instead of always assuming "just saved" on open. Returns ([], None, [])
+    if none saved yet, or the file is missing/corrupt -- this is edited
+    interactively, so a bad file should start the user from an empty list
+    rather than block the app."""
+    if not GLOSSARY_PATH.exists():
+        return [], None, []
+    try:
+        data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return [], None, []
+    if not isinstance(data, dict):
+        return [], None, []
+    entry = data.get(_glossary_key(source_lang, target_lang))
+    if not isinstance(entry, dict):
+        return [], None, []
+    pairs = _parse_pairs(entry.get("pairs"))
     glossary_id = entry.get("glossary_id")
-    return pairs, glossary_id if isinstance(glossary_id, str) else None
+    synced_pairs = _parse_pairs(entry.get("synced_pairs"))
+    return pairs, glossary_id if isinstance(glossary_id, str) else None, synced_pairs
 
 
 def save_glossary_entries(
-    source_lang: str, target_lang: str, pairs: list[tuple[str, str]], glossary_id: str | None
+    source_lang: str,
+    target_lang: str,
+    pairs: list[tuple[str, str]],
+    glossary_id: str | None,
+    synced_pairs: list[tuple[str, str]] | None = _UNSET,  # type: ignore[assignment]
 ) -> None:
     """Writes the word-pair list and current remote glossary_id (or None,
     if nothing has been successfully synced to Palabra yet / it was
     cleared) for one language pair, leaving every other pair's entry in
-    the file untouched."""
+    the file untouched. synced_pairs records what was actually last pushed
+    to Palabra -- pass it explicitly only after a real sync attempt
+    (success -> the pairs just sent; the field is otherwise left as
+    whatever was previously recorded, since a plain local edit doesn't
+    change what's live on Palabra)."""
     if GLOSSARY_PATH.exists():
         try:
             data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
@@ -305,9 +330,38 @@ def save_glossary_entries(
             data = {}
     else:
         data = {}
-    data[_glossary_key(source_lang, target_lang)] = {
+    key = _glossary_key(source_lang, target_lang)
+    if synced_pairs is _UNSET:
+        existing_entry = data.get(key)
+        synced_pairs = _parse_pairs(existing_entry.get("synced_pairs")) if isinstance(existing_entry, dict) else []
+    data[key] = {
         "pairs": [list(p) for p in pairs],
         "glossary_id": glossary_id,
+        "synced_pairs": [list(p) for p in (synced_pairs or [])],
     }
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     GLOSSARY_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def clear_glossary_id_if_matches(glossary_id: str) -> None:
+    """Called after deleting a glossary directly (e.g. from the account-wide
+    manager view) -- if any local language pair still points at that now-gone
+    glossary_id, clears it (and the synced_pairs that went with it) so the
+    next time that pair's GlossaryDialog opens it correctly shows "not
+    synced" instead of a stale, now-false "Aktywny w Palabra."."""
+    if not GLOSSARY_PATH.exists():
+        return
+    try:
+        data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(data, dict):
+        return
+    changed = False
+    for entry in data.values():
+        if isinstance(entry, dict) and entry.get("glossary_id") == glossary_id:
+            entry["glossary_id"] = None
+            entry["synced_pairs"] = []
+            changed = True
+    if changed:
+        GLOSSARY_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

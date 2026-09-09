@@ -140,6 +140,52 @@ class GlossarySaver(QObject):
             self.finished.emit(True, tr("Zapisano w Palabra."), new_id)
 
 
+class GlossaryLister(QObject):
+    """Fetches every glossary on the account (see app/glossary.py's
+    list_glossaries) on its own plain thread -- same reasoning as
+    ApiKeyTester/GlossarySaver above.
+    """
+
+    finished = Signal(bool, str, object)  # ok, error_message, glossaries (or None)
+
+    def __init__(self, api_key: str):
+        super().__init__()
+        self._api_key = api_key
+
+    def run(self) -> None:
+        try:
+            items = glossary.list_glossaries(self._api_key)
+        except glossary.GlossaryError as e:
+            self.finished.emit(False, f"{tr('Błąd')}: {e}", None)
+            return
+        except Exception as e:
+            self.finished.emit(False, f"{tr('Nieoczekiwany błąd')}: {e}", None)
+            return
+        self.finished.emit(True, "", items)
+
+
+class GlossaryDeleter(QObject):
+    """Deletes one glossary by id on its own plain thread (see GlossaryLister)."""
+
+    finished = Signal(bool, str, str)  # ok, error_message, glossary_id
+
+    def __init__(self, api_key: str, glossary_id: str):
+        super().__init__()
+        self._api_key = api_key
+        self._glossary_id = glossary_id
+
+    def run(self) -> None:
+        try:
+            glossary.delete_glossary(self._api_key, self._glossary_id)
+        except glossary.GlossaryError as e:
+            self.finished.emit(False, f"{tr('Błąd')}: {e}", self._glossary_id)
+            return
+        except Exception as e:
+            self.finished.emit(False, f"{tr('Nieoczekiwany błąd')}: {e}", self._glossary_id)
+            return
+        self.finished.emit(True, "", self._glossary_id)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -428,8 +474,13 @@ class GlossaryDialog(QDialog):
         self.setWindowTitle(tr("Glosariusz"))
         self._source_lang = source_lang
         self._target_lang = target_lang
-        self._pairs, self._glossary_id = config.load_glossary_entries(source_lang, target_lang)
-        self._dirty = False  # local edits made since the last successful save to Palabra
+        self._pairs, self._glossary_id, synced_pairs = config.load_glossary_entries(source_lang, target_lang)
+        # Dirty means "the local list differs from what was actually last
+        # pushed to Palabra" -- computed from the persisted synced_pairs
+        # rather than always assuming False on open, otherwise reopening the
+        # dialog after closing without saving would falsely show a green
+        # "Aktywny w Palabra." status for a list that was never actually sent.
+        self._dirty = self._pairs != synced_pairs
         self._saver_worker: GlossarySaver | None = None
         self._saver_thread: threading.Thread | None = None
 
@@ -457,16 +508,30 @@ class GlossaryDialog(QDialog):
         add_row.addWidget(self.target_edit)
 
         btn_row = QHBoxLayout()
-        add_btn = QPushButton(tr("Dodaj"))
-        add_btn.clicked.connect(self._on_add)
-        remove_btn = QPushButton(tr("Usuń zaznaczone"))
-        remove_btn.clicked.connect(self._on_remove)
-        btn_row.addWidget(add_btn)
-        btn_row.addWidget(remove_btn)
+        self.add_btn = QPushButton(tr("Dodaj"))
+        self.add_btn.clicked.connect(self._on_add)
+        self.remove_btn = QPushButton(tr("Usuń zaznaczone"))
+        self.remove_btn.clicked.connect(self._on_remove)
+        btn_row.addWidget(self.add_btn)
+        btn_row.addWidget(self.remove_btn)
         btn_row.addStretch()
 
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
+        # Defense-in-depth alongside _request()'s own truncation of non-JSON
+        # error bodies: even a truncated HTML-ish message shouldn't be given
+        # a chance to rich-text-render and distort this dialog's layout.
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
+
+        manage_btn = QPushButton(tr("Wszystkie glosariusze na koncie..."))
+        manage_btn.setToolTip(
+            tr(
+                "Pokazuje wszystkie glosariusze zapisane na koncie Palabra (nie tylko dla tej pary"
+                " językowej) i pozwala usunąć dowolny z nich -- przydatne, jeśli jakiś pozostał"
+                " aktywny mimo utraty lokalnego zapisu w tej aplikacji."
+            )
+        )
+        manage_btn.clicked.connect(self._on_manage_all)
 
         save_row = QHBoxLayout()
         self.save_btn = QPushButton(tr("Zapisz w Palabra"))
@@ -474,6 +539,7 @@ class GlossaryDialog(QDialog):
         close_btn = QPushButton(tr("Zamknij"))
         close_btn.clicked.connect(self.close)
         save_row.addWidget(self.save_btn)
+        save_row.addWidget(manage_btn)
         save_row.addStretch()
         save_row.addWidget(close_btn)
 
@@ -538,30 +604,213 @@ class GlossaryDialog(QDialog):
             )
             return
         self.save_btn.setEnabled(False)
+        # Also block local edits for the duration of the save: GlossarySaver
+        # captures a snapshot of self._pairs at dispatch time below, so an
+        # edit made while the save is in flight would be silently lost --
+        # the dialog would still end up reporting "✓ Zapisano w Palabra."
+        # for a list that was never actually sent.
+        self.add_btn.setEnabled(False)
+        self.remove_btn.setEnabled(False)
         self.status_label.setStyleSheet("")
         self.status_label.setText(tr("Zapisywanie..."))
 
+        sent_pairs = list(self._pairs)
         worker = GlossarySaver(
             creds.api_key, "CRC Translator", self._source_lang, self._target_lang,
-            list(self._pairs), self._glossary_id,
+            sent_pairs, self._glossary_id,
         )
-        worker.finished.connect(self._on_save_finished, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(
+            lambda ok, message, new_id: self._on_save_finished(ok, message, new_id, sent_pairs),
+            Qt.ConnectionType.QueuedConnection,
+        )
         thread = threading.Thread(target=worker.run, daemon=True)
         self._saver_worker = worker
         self._saver_thread = thread
         thread.start()
 
-    def _on_save_finished(self, ok: bool, message: str, new_glossary_id: object) -> None:
+    def _on_save_finished(self, ok: bool, message: str, new_glossary_id: object, sent_pairs: list[tuple[str, str]]) -> None:
         self.save_btn.setEnabled(True)
+        self.add_btn.setEnabled(True)
+        self.remove_btn.setEnabled(True)
+        self._saver_worker = None
+        self._saver_thread = None
         if ok:
             self._glossary_id = new_glossary_id
-            self._dirty = False
-            config.save_glossary_entries(self._source_lang, self._target_lang, self._pairs, self._glossary_id)
+            # Dirty only if the list changed again after this save was sent
+            # (impossible right now since edits were blocked above, but this
+            # keeps the check correct instead of assuming "still False").
+            self._dirty = self._pairs != sent_pairs
+            config.save_glossary_entries(
+                self._source_lang, self._target_lang, self._pairs, self._glossary_id, synced_pairs=sent_pairs
+            )
             self.status_label.setStyleSheet("color: #2a7a2a;")
             self.status_label.setText(f"✓ {message}")
         else:
             self.status_label.setStyleSheet("color: #b02a2a;")
             self.status_label.setText(f"✗ {message}")
+
+    def _on_manage_all(self) -> None:
+        GlossaryManagerDialog(self).exec()
+
+    def closeEvent(self, event) -> None:
+        # Mirrors SettingsDialog.closeEvent: waits for the save thread so
+        # closing (or reopening) the dialog mid-save can't let a stale,
+        # already-superseded glossary_id get written back to disk -- which
+        # would silently orphan whichever glossary the in-flight save was
+        # about to make active (see app/glossary.py's module docstring).
+        if self._saver_thread is not None:
+            thread = self._saver_thread
+            wait_loop = QEventLoop()
+            poll_timer = QTimer()
+            poll_timer.timeout.connect(lambda: None if thread.is_alive() else wait_loop.quit())
+            poll_timer.start(50)
+            safety_timer = QTimer()
+            safety_timer.setSingleShot(True)
+            safety_timer.timeout.connect(wait_loop.quit)
+            safety_timer.start(3000)
+            wait_loop.exec()
+        super().closeEvent(event)
+
+
+class GlossaryManagerDialog(QDialog):
+    """Lists every glossary on the account (not just the one this app's
+    local glossary.json currently knows about for the selected language
+    pair) and lets the user delete any of them -- the only in-app way to
+    find and remove an orphaned glossary: one whose glossary_id was lost
+    locally (a partial save, editing the same account from another
+    machine, or a bug) but is still is_enabled on Palabra's side, silently
+    rewriting every future translation for its language pair with no
+    other way to even see it (see app/glossary.py's list_glossaries
+    docstring)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("Wszystkie glosariusze na koncie"))
+        self.resize(500, 350)
+        self._list_thread: threading.Thread | None = None
+        self._list_worker: GlossaryLister | None = None
+        self._delete_thread: threading.Thread | None = None
+        self._delete_worker: GlossaryDeleter | None = None
+        self._glossaries: list[dict] = []
+
+        self.list_widget = QListWidget()
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
+
+        btn_row = QHBoxLayout()
+        self.refresh_btn = QPushButton(tr("Odśwież"))
+        self.refresh_btn.clicked.connect(self._refresh)
+        self.delete_btn = QPushButton(tr("Usuń zaznaczony"))
+        self.delete_btn.clicked.connect(self._on_delete)
+        close_btn = QPushButton(tr("Zamknij"))
+        close_btn.clicked.connect(self.close)
+        btn_row.addWidget(self.refresh_btn)
+        btn_row.addWidget(self.delete_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.list_widget)
+        layout.addWidget(self.status_label)
+        layout.addLayout(btn_row)
+
+        self._refresh()
+
+    def _refresh(self) -> None:
+        creds = config.load_credentials()
+        if not creds.api_key:
+            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setText(tr("Ustaw klucz API w Ustawieniach przed zarządzaniem glosariuszami."))
+            return
+        self.refresh_btn.setEnabled(False)
+        self.delete_btn.setEnabled(False)
+        self.status_label.setStyleSheet("")
+        self.status_label.setText(tr("Wczytywanie..."))
+
+        worker = GlossaryLister(creds.api_key)
+        worker.finished.connect(self._on_list_finished, Qt.ConnectionType.QueuedConnection)
+        thread = threading.Thread(target=worker.run, daemon=True)
+        self._list_worker = worker
+        self._list_thread = thread
+        thread.start()
+
+    def _on_list_finished(self, ok: bool, message: str, items: object) -> None:
+        self.refresh_btn.setEnabled(True)
+        self.delete_btn.setEnabled(True)
+        self._list_worker = None
+        self._list_thread = None
+        if not ok:
+            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setText(f"✗ {message}")
+            return
+        self._glossaries = items or []
+        self.list_widget.clear()
+        for g in self._glossaries:
+            state = tr("włączony") if g.get("is_enabled") else tr("wyłączony")
+            self.list_widget.addItem(
+                f"{g.get('name', '?')} -- {g.get('source_lang', '?')} → {g.get('target_lang', '?')} ({state})"
+            )
+        self.status_label.setStyleSheet("")
+        self.status_label.setText("" if self._glossaries else tr("Brak glosariuszy na koncie."))
+
+    def _on_delete(self) -> None:
+        row = self.list_widget.currentRow()
+        if row < 0 or row >= len(self._glossaries):
+            return
+        target = self._glossaries[row]
+        answer = QMessageBox.question(
+            self,
+            tr("Usunąć glosariusz?"),
+            f"{tr('Usunąć')} \"{target.get('name', '?')}\" "
+            f"({target.get('source_lang', '?')} → {target.get('target_lang', '?')})? "
+            f"{tr('Tego nie można cofnąć.')}",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        creds = config.load_credentials()
+        if not creds.api_key:
+            return
+        self.refresh_btn.setEnabled(False)
+        self.delete_btn.setEnabled(False)
+        self.status_label.setStyleSheet("")
+        self.status_label.setText(tr("Usuwanie..."))
+
+        worker = GlossaryDeleter(creds.api_key, target["glossary_id"])
+        worker.finished.connect(self._on_delete_finished, Qt.ConnectionType.QueuedConnection)
+        thread = threading.Thread(target=worker.run, daemon=True)
+        self._delete_worker = worker
+        self._delete_thread = thread
+        thread.start()
+
+    def _on_delete_finished(self, ok: bool, message: str, glossary_id: str) -> None:
+        self._delete_worker = None
+        self._delete_thread = None
+        if not ok:
+            self.refresh_btn.setEnabled(True)
+            self.delete_btn.setEnabled(True)
+            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setText(f"✗ {message}")
+            return
+        # Keeps any already-open GlossaryDialog for this language pair from
+        # later writing back a glossary_id that no longer exists anywhere.
+        config.clear_glossary_id_if_matches(glossary_id)
+        self._refresh()  # re-enables buttons + re-fetches the now-updated list
+
+    def closeEvent(self, event) -> None:
+        for thread in (self._list_thread, self._delete_thread):
+            if thread is None:
+                continue
+            wait_loop = QEventLoop()
+            poll_timer = QTimer()
+            poll_timer.timeout.connect(lambda t=thread: None if t.is_alive() else wait_loop.quit())
+            poll_timer.start(50)
+            safety_timer = QTimer()
+            safety_timer.setSingleShot(True)
+            safety_timer.timeout.connect(wait_loop.quit)
+            safety_timer.start(3000)
+            wait_loop.exec()
+        super().closeEvent(event)
 
 
 @dataclass
