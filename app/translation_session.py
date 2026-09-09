@@ -257,8 +257,10 @@ class TranslationRunner:
             except Exception as e:
                 self._on_error(f"{tr('Nieoczekiwany błąd')}: {e}")
 
-    def request_change_mic_device(self, device_index: int) -> None:
-        """Swaps the physical input device a live MicStream reads from.
+    def request_change_mic_device(self, device_index: int, channel: int | None = None) -> None:
+        """Swaps the physical input device (and/or which of its channels to
+        capture, for a multi-channel device -- see MicStream's channel
+        comment) a live MicStream reads from.
 
         Unlike request_change_voice (which needs set_task() -- a real
         server-side call), this is purely local device I/O: the Palabra
@@ -277,11 +279,11 @@ class TranslationRunner:
         budget (~4s) on a flaky device.
         """
         if hasattr(self._source, "switch_device"):
-            asyncio.create_task(self._do_change_mic_device(device_index))
+            asyncio.create_task(self._do_change_mic_device(device_index, channel))
 
-    async def _do_change_mic_device(self, device_index: int) -> None:
+    async def _do_change_mic_device(self, device_index: int, channel: int | None) -> None:
         try:
-            await self._source.switch_device(device_index)
+            await self._source.switch_device(device_index, channel)
         except Exception as e:
             self._on_error(f"{tr('Nie udało się przełączyć mikrofonu')}: {e}")
 

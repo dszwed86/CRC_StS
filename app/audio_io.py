@@ -282,7 +282,7 @@ class MicStream:
     threshold are replaced with silence instead of being sent as-is).
     """
 
-    def __init__(self, device: int | None = None):
+    def __init__(self, device: int | None = None, channel: int | None = None):
         self._q: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self._paused = threading.Event()
         self._gain = 1.0
@@ -298,6 +298,17 @@ class MicStream:
         # not read directly -- see its docstring for why.
         self._level: float = 0.0
         self._last_callback_at: float = time.monotonic()
+        # Which raw hardware input channel to capture, for a multi-channel
+        # device (e.g. a 2-in audio interface like a Behringer UMC202HD,
+        # with two different microphones on channels 1 and 2). None keeps
+        # today's plain behavior (opens with channels=CHANNELS, i.e. mono)
+        # completely untouched -- the vast majority of devices/users never
+        # need this. An explicit index instead opens the stream with enough
+        # channels to reach it and de-interleaves down to just that one
+        # channel in _make_callback(), so everything downstream of this
+        # class (chunks(), the rest of the pipeline) still only ever sees
+        # plain mono PCM, exactly as before.
+        self._channel = channel
         self._stream = self._open_stream(device)
 
     @property
@@ -313,26 +324,44 @@ class MicStream:
         return self._level
 
     def _open_stream(self, device: int | None) -> sd.RawInputStream:
+        channel = self._channel
         return _open_with_retry(lambda: sd.RawInputStream(
             samplerate=RATE,
-            channels=CHANNELS,
+            channels=(channel + 1) if channel is not None else CHANNELS,
             dtype="int16",
             device=device,
-            callback=self._on_audio,
+            callback=self._make_callback(channel),
             extra_settings=_wasapi_extra_settings(),
         ))
 
-    def _on_audio(self, indata, frames, time_info, status) -> None:
-        self._last_callback_at = time.monotonic()
-        data = bytes(indata)
-        if data:
-            self._level = min(1.0, int(np.abs(np.frombuffer(data, dtype=np.int16)).max()) / 32767)
-        else:
-            self._level = 0.0
-        try:
-            self._q.put_nowait(data)
-        except queue.Full:
-            pass  # drop audio rather than block the audio-driver thread
+    def _make_callback(self, channel: int | None) -> Callable[..., None]:
+        # A fresh closure per open (not a single self._on_audio bound method
+        # reading self._channel): switch_device() below can change BOTH the
+        # device and the channel together, but the OLD stream keeps calling
+        # back on its own thread for a few more frames after the new one is
+        # opened, right up until old_stream.stop() -- if the callback read
+        # self._channel live, updating that attribute for the new stream
+        # would retroactively (and incorrectly) change how the OLD stream's
+        # still-in-flight callbacks try to de-interleave THEIR data, which
+        # was captured at the OLD channel count. Capturing `channel` here
+        # instead ties each stream to the channel count it was actually
+        # opened with, for its whole lifetime.
+        def _on_audio(indata, frames, time_info, status) -> None:
+            self._last_callback_at = time.monotonic()
+            data = bytes(indata)
+            if channel is not None and data:
+                arr = np.frombuffer(data, dtype=np.int16).reshape(-1, channel + 1)
+                data = arr[:, channel].tobytes()
+            if data:
+                self._level = min(1.0, int(np.abs(np.frombuffer(data, dtype=np.int16)).max()) / 32767)
+            else:
+                self._level = 0.0
+            try:
+                self._q.put_nowait(data)
+            except queue.Full:
+                pass  # drop audio rather than block the audio-driver thread
+
+        return _on_audio
 
     def __enter__(self) -> "MicStream":
         try:
@@ -346,19 +375,21 @@ class MicStream:
         self._stream.stop()
         self._stream.close()
 
-    async def switch_device(self, new_device: int | None) -> None:
-        """Swaps to a different physical input device without disturbing
-        chunks()'s already-running pacing loop: it only ever reads from
-        self._q, filled by the same self._on_audio callback regardless of
-        which sd.RawInputStream is calling it, so nothing about the async
-        generator or its pacing state needs to change -- only which stream
-        object is open.
+    async def switch_device(self, new_device: int | None, channel: int | None) -> None:
+        """Swaps to a different physical input device (and/or which of its
+        channels to capture, see __init__'s channel comment) without
+        disturbing chunks()'s already-running pacing loop: it only ever
+        reads from self._q, filled by whichever callback is currently
+        active regardless of which sd.RawInputStream is calling it, so
+        nothing about the async generator or its pacing state needs to
+        change -- only which stream object is open.
 
         The new stream is opened and started BEFORE the old one is
-        stopped/closed, and self._stream is only reassigned once that
-        succeeds -- so a failure here (e.g. the new device doesn't support
-        our fixed sample rate) leaves the working old stream untouched
-        instead of leaving the session without any mic at all.
+        stopped/closed, and self._stream/self._channel are only reassigned
+        once that succeeds -- so a failure here (e.g. the new device
+        doesn't support our fixed sample rate) leaves the working old
+        stream untouched instead of leaving the session without any mic
+        at all.
 
         Async (unlike _open_stream(), used for the initial device open):
         this runs while TranslationRunner.run()'s event loop is already
@@ -378,15 +409,16 @@ class MicStream:
         """
         new_stream = await _open_with_retry_async(lambda: sd.RawInputStream(
             samplerate=RATE,
-            channels=CHANNELS,
+            channels=(channel + 1) if channel is not None else CHANNELS,
             dtype="int16",
             device=new_device,
-            callback=self._on_audio,
+            callback=self._make_callback(channel),
             extra_settings=_wasapi_extra_settings(),
         ))
         new_stream.start()
         old_stream = self._stream
         self._stream = new_stream
+        self._channel = channel
         old_stream.stop()
         old_stream.close()
 
@@ -705,8 +737,8 @@ class MixedSource:
         if self._file is not None:
             self._file.seek(position_ms)
 
-    async def switch_device(self, new_device: int | None) -> None:
-        await self._mic.switch_device(new_device)
+    async def switch_device(self, new_device: int | None, channel: int | None) -> None:
+        await self._mic.switch_device(new_device, channel)
 
     @property
     def mic_level(self) -> float:

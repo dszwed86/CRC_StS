@@ -378,6 +378,7 @@ class SessionConfig:
     mic_device: int | None
     output_device: int | None
     file_path: str | None
+    mic_channel: int | None = None
     mic_gain: float = 1.0
     mic_gate_threshold: float = 0.0
     voice_id: str | None = None
@@ -405,6 +406,7 @@ class SessionWorker(QObject):
         self._source_lang = config.source_lang
         self._target_lang = config.target_lang
         self._mic_device = config.mic_device
+        self._mic_channel = config.mic_channel
         self._output_device = config.output_device
         self._file_path = config.file_path
         self._initial_mic_gain = config.mic_gain
@@ -465,7 +467,7 @@ class SessionWorker(QObject):
             # escaped uncaught, finished.emit() in the finally block below would
             # never run, leaving the GUI thinking a session is still active --
             # Start/Stop stuck forever until the app is restarted.
-            mic = MicStream(device=self._mic_device)
+            mic = MicStream(device=self._mic_device, channel=self._mic_channel)
             mic.set_gain(self._initial_mic_gain)
             mic.set_gate_threshold(self._initial_gate_threshold)
             self._mic_source = mic
@@ -540,8 +542,8 @@ class SessionWorker(QObject):
     def change_voice(self, voice_id: str | None, voice_cloning: bool) -> None:
         self._call_on_loop("request_change_voice", voice_id, voice_cloning)
 
-    def change_mic_device(self, device_index: int) -> None:
-        self._call_on_loop("request_change_mic_device", device_index)
+    def change_mic_device(self, device_index: int, channel: int | None) -> None:
+        self._call_on_loop("request_change_mic_device", device_index, channel)
 
     def set_file(self, path: str | None) -> None:
         self._call_on_loop("request_set_file", path)
@@ -718,6 +720,21 @@ class MainWindow(QMainWindow):
             self.mic_combo.addItem(d.name, d.index)
         self.mic_combo.currentIndexChanged.connect(self._on_mic_selection_changed)
 
+        # Only shown for a device with more than one input channel (e.g. a
+        # 2-in audio interface like a Behringer UMC202HD, with two
+        # different microphones on channels 1 and 2) -- hidden for the
+        # vast majority of ordinary single-source mics. See
+        # _populate_mic_channel_combo() and MicStream's channel comment for
+        # why the first item still maps to data=None (preserves today's
+        # default capture path untouched) rather than an explicit 0.
+        self.mic_channel_combo = QComboBox()
+        self.mic_channel_combo.setToolTip(
+            tr("Który kanał wejściowy tego urządzenia nagrywać (dla interfejsów z więcej niż jednym wejściem).")
+        )
+        self.mic_channel_combo.setVisible(False)
+        self.mic_channel_combo.currentIndexChanged.connect(self._on_mic_channel_changed)
+        self._populate_mic_channel_combo()
+
         self.mic_gain_row = QWidget()
         mic_gain_outer = QVBoxLayout(self.mic_gain_row)
         mic_gain_outer.setContentsMargins(0, 0, 0, 0)
@@ -844,6 +861,7 @@ class MainWindow(QMainWindow):
         # needed at all (contrast with the old _on_mode_changed).
         mic_row = QHBoxLayout()
         mic_row.addWidget(self.mic_combo, stretch=1)
+        mic_row.addWidget(self.mic_channel_combo)
         self.refresh_devices_btn = QPushButton(tr("Odśwież urządzenia"))
         self.refresh_devices_btn.clicked.connect(self._on_refresh_devices)
         mic_row.addWidget(self.refresh_devices_btn)
@@ -1124,6 +1142,21 @@ class MainWindow(QMainWindow):
             idx = self.mic_combo.findText(mic_name)
             if idx >= 0:
                 self.mic_combo.setCurrentIndex(idx)
+        if "mic_channel" in settings:
+            # Restored AFTER mic_name above: selecting the device already
+            # rebuilt this combo's items for it (see
+            # _on_mic_selection_changed -> _populate_mic_channel_combo),
+            # resetting to its default item -- this picks the saved channel
+            # back out of that freshly-built list, or is silently skipped
+            # if the device no longer offers that many channels.
+            # A manual scan, not findData(): findData() unreliably fails to
+            # match a plain None through Qt's QVariant wrapping (same
+            # reasoning as voice_kind's restoration below).
+            wanted_channel = settings["mic_channel"]
+            for i in range(self.mic_channel_combo.count()):
+                if self.mic_channel_combo.itemData(i) == wanted_channel:
+                    self.mic_channel_combo.setCurrentIndex(i)
+                    break
         output_name = settings.get("output_device_name")
         if output_name:
             idx = self.output_combo.findText(output_name)
@@ -1169,6 +1202,7 @@ class MainWindow(QMainWindow):
         voice_kind, voice_id = self.voice_combo.currentData() if self.voice_combo.count() else ("auto", None)
         config.save_app_settings({
             "mic_device_name": self.mic_combo.currentText(),
+            "mic_channel": self.mic_channel_combo.currentData() if self.mic_channel_combo.count() else None,
             "output_device_name": self.output_combo.currentText(),
             "mic_gain": self.mic_gain_slider.value(),
             "mic_muted": self.mic_mute_check.isChecked(),
@@ -1261,14 +1295,42 @@ class MainWindow(QMainWindow):
         self._rebuild_voice_combo()
 
     def _on_mic_selection_changed(self, _index: int) -> None:
-        # Live device switching mid-session (see SessionWorker.change_mic_device)
-        # -- a no-op before Start (no worker yet). The mic is always the
-        # active source now, so there's no mode check left to make.
+        # Repopulating the channel combo for the newly selected device must
+        # happen regardless of whether a session is running -- so it's
+        # correctly populated by the time Start reads it too, not just for
+        # live mid-session switches. currentIndexChanged fires again from
+        # this (a fresh combo starts at index 0), which reaches
+        # _on_mic_channel_changed below and does the actual live switch.
+        self._populate_mic_channel_combo()
+
+    def _populate_mic_channel_combo(self) -> None:
+        device_index = self.mic_combo.currentData()
+        channels = next(
+            (d.max_input_channels for d in self._input_devices if d.index == device_index),
+            1,
+        )
+        self.mic_channel_combo.blockSignals(True)
+        self.mic_channel_combo.clear()
+        # First item always maps to data=None (today's default capture
+        # path, untouched -- see MicStream's channel comment), even though
+        # it's labeled "Kanał 1": the None/explicit-0 distinction is an
+        # internal safety detail the user doesn't need to know about.
+        for i in range(max(1, channels)):
+            self.mic_channel_combo.addItem(f"{tr('Kanał')} {i + 1}", None if i == 0 else i)
+        self.mic_channel_combo.blockSignals(False)
+        self.mic_channel_combo.setVisible(channels > 1)
+        self._on_mic_channel_changed(self.mic_channel_combo.currentIndex())
+
+    def _on_mic_channel_changed(self, _index: int) -> None:
+        # Live device/channel switching mid-session (see
+        # SessionWorker.change_mic_device) -- a no-op before Start (no
+        # worker yet). The mic is always the active source now, so there's
+        # no mode check left to make.
         if self._worker is None:
             return
         device = self.mic_combo.currentData()
         if device is not None:
-            self._worker.change_mic_device(device)
+            self._worker.change_mic_device(device, self.mic_channel_combo.currentData())
 
     def _choose_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1463,6 +1525,7 @@ class MainWindow(QMainWindow):
             source_lang=source_lang,
             target_lang=target_lang,
             mic_device=mic_device,
+            mic_channel=self.mic_channel_combo.currentData() if self.mic_channel_combo.count() else None,
             output_device=output_device,
             file_path=file_path,
             mic_gain=0.0 if self._mic_muted else self.mic_gain_slider.value() / 100,

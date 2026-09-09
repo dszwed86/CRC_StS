@@ -66,6 +66,7 @@ def log_error(message: str) -> None:
 
 _APP_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {
     "mic_device_name": str,
+    "mic_channel": (int, type(None)),
     "output_device_name": str,
     "mic_gain": (int, float),
     "mic_muted": bool,
