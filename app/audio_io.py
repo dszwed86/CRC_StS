@@ -900,6 +900,39 @@ class MixedSource:
                 self._file_task = asyncio.create_task(self._pump(self._file, self._file_q, is_file=True))
 
 
+class _LinearResampler:
+    """Streaming linear-interpolation resampler for mono int16 PCM.
+
+    Continuous across successive push() calls: carries the trailing
+    fractional source position and a couple of un-consumed source samples
+    forward internally, so back-to-back chunks resample as one continuous
+    stream instead of each being interpolated in isolation -- the latter
+    would leave an audible click at every chunk boundary (every server
+    Audio event, not on any fixed schedule).
+    """
+
+    def __init__(self, from_rate: int, to_rate: int):
+        self._step = from_rate / to_rate  # source samples per output sample
+        self._buf = np.zeros(0, dtype=np.float64)
+        self._pos = 0.0  # next output sample's source index, relative to self._buf[0]
+
+    def push(self, pcm: np.ndarray) -> np.ndarray:
+        self._buf = np.concatenate([self._buf, pcm.astype(np.float64)])
+        out = []
+        while self._pos + 1.0 < len(self._buf):
+            i = int(self._pos)
+            frac = self._pos - i
+            out.append(self._buf[i] * (1 - frac) + self._buf[i + 1] * frac)
+            self._pos += self._step
+        consumed = int(self._pos)
+        if consumed > 0:
+            self._buf = self._buf[consumed:]
+            self._pos -= consumed
+        if not out:
+            return np.zeros(0, dtype=np.int16)
+        return np.clip(np.array(out), -32768, 32767).astype(np.int16)
+
+
 class OutputSink:
     """Plays received PCM chunks to a chosen output device (e.g. a virtual cable)."""
 
@@ -922,8 +955,35 @@ class OutputSink:
         # caused an intermittent native crash: blocking a PortAudio callback on a
         # Python lock can collide with the stream's own stop()/close() teardown.
         self._clear_requested = threading.Event()
+        # WASAPI's auto_convert (see _wasapi_extra_settings) inserts its own
+        # sample-rate converter for a device whose native rate doesn't match
+        # RATE -- but that's Windows-only. Without an equivalent, CoreAudio
+        # (macOS) doesn't reliably resample a stream opened at a rate the
+        # device doesn't natively support: it can silently accept the open
+        # call while the actual hardware clock keeps running at ITS OWN
+        # rate, producing pitch-shifted, crackling playback -- confirmed as
+        # the cause of a real report (some Mac speakers/headphones sounding
+        # "screechy"/"crackly"). On any platform without WASAPI, open at the
+        # device's own native rate instead and resample our fixed-rate PCM
+        # to it ourselves.
+        output_rate = RATE
+        self._resampler: _LinearResampler | None = None
+        if _wasapi_extra_settings() is None:
+            try:
+                native_rate = int(round(sd.query_devices(device)["default_samplerate"]))
+            except Exception:
+                native_rate = RATE
+            if native_rate and native_rate != RATE:
+                output_rate = native_rate
+                self._resampler = _LinearResampler(RATE, native_rate)
+        # Scaled from MAX_OUTPUT_BACKLOG_SAMPLES (defined at RATE) to
+        # output_rate, so the ~1.2s backlog cap (see _trim_backlog) means
+        # the same thing in wall-clock time whether or not resampling is
+        # active -- self._q holds samples at output_rate now, not always
+        # RATE.
+        self._max_backlog_samples = int(MAX_OUTPUT_BACKLOG_SAMPLES * output_rate / RATE)
         self._stream = _open_with_retry(lambda: sd.OutputStream(
-            samplerate=RATE,
+            samplerate=output_rate,
             channels=CHANNELS,
             dtype="int16",
             device=device,
@@ -970,8 +1030,13 @@ class OutputSink:
         self._stream.close()
 
     def play(self, pcm: bytes) -> None:
+        arr = np.frombuffer(pcm, dtype=np.int16)
+        if self._resampler is not None:
+            arr = self._resampler.push(arr)
+            if arr.size == 0:
+                return
         try:
-            self._q.put_nowait(np.frombuffer(pcm, dtype=np.int16))
+            self._q.put_nowait(arr)
         except queue.Full:
             pass  # drop rather than build unbounded latency
         self._trim_backlog()
@@ -989,14 +1054,14 @@ class OutputSink:
         fix). queue.Queue's own lock is already safely used from both this
         thread and the realtime callback thread elsewhere in this class (see
         _on_playback's get_nowait()), so briefly holding it here to drop the
-        OLDEST queued audio down to MAX_OUTPUT_BACKLOG_SAMPLES is safe --
+        OLDEST queued audio down to self._max_backlog_samples is safe --
         unlike the custom Python lock previously removed from __init__ (see
         _clear_requested), this doesn't hold a lock across the callback's own
         blocking work, just a quick internal deque trim.
         """
         with self._q.mutex:
             backlog = sum(len(item) for item in self._q.queue)
-            while backlog > MAX_OUTPUT_BACKLOG_SAMPLES and self._q.queue:
+            while backlog > self._max_backlog_samples and self._q.queue:
                 # Trim precisely TO the cap, not just below it: each queued
                 # item is one whole Audio event's PCM (server-sized, not
                 # bounded to any fixed chunk length by this app), so
@@ -1006,7 +1071,7 @@ class OutputSink:
                 # ~1.2s cap. A numpy slice is a view, not a copy, so keeping
                 # the un-trimmed tail of the oldest item is cheap.
                 oldest = self._q.queue[0]
-                overshoot = backlog - MAX_OUTPUT_BACKLOG_SAMPLES
+                overshoot = backlog - self._max_backlog_samples
                 if len(oldest) > overshoot:
                     self._q.queue[0] = oldest[overshoot:]
                     backlog -= overshoot
