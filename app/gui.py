@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 from palabra_ai import Palabra
 from palabra_ai.exc import AuthError, PalabraError
 
-from . import __version__, config, i18n
+from . import __version__, config, glossary, i18n
 from .i18n import tr
 from .audio_io import (
     FileStream,
@@ -100,6 +100,44 @@ class ApiKeyTester(QObject):
         palabra = Palabra(api_key=self._api_key, region=self._region)
         async with palabra.stt():
             pass
+
+
+class GlossarySaver(QObject):
+    """Pushes a local word-pair list to Palabra's glossary REST API (see
+    app/glossary.py) on its own plain thread, same reasoning as
+    ApiKeyTester -- this is plain blocking HTTP (urllib), not the
+    translation session's own asyncio loop, so it must not run on the GUI
+    thread either.
+    """
+
+    finished = Signal(bool, str, object)  # ok, message, new_glossary_id (or None)
+
+    def __init__(self, api_key: str, name: str, source_lang: str, target_lang: str,
+                 pairs: list[tuple[str, str]], old_glossary_id: str | None):
+        super().__init__()
+        self._api_key = api_key
+        self._name = name
+        self._source_lang = source_lang
+        self._target_lang = target_lang
+        self._pairs = pairs
+        self._old_glossary_id = old_glossary_id
+
+    def run(self) -> None:
+        try:
+            new_id = glossary.sync_glossary(
+                self._api_key, self._name, self._source_lang, self._target_lang,
+                self._pairs, self._old_glossary_id,
+            )
+        except glossary.GlossaryError as e:
+            self.finished.emit(False, f"{tr('Błąd')}: {e}", None)
+            return
+        except Exception as e:
+            self.finished.emit(False, f"{tr('Nieoczekiwany błąd')}: {e}", None)
+            return
+        if new_id is None:
+            self.finished.emit(True, tr("Lista jest pusta -- glosariusz wyłączony dla tej pary językowej."), None)
+        else:
+            self.finished.emit(True, tr("Zapisano w Palabra."), new_id)
 
 
 class SettingsDialog(QDialog):
@@ -368,6 +406,162 @@ class SavedVoicesDialog(QDialog):
         del self._voices[row]
         config.save_saved_voices(self._voices)
         self._refresh_list()
+
+
+class GlossaryDialog(QDialog):
+    """Manages a local word-pair list that forces specific source->target
+    translations (e.g. proper names, terminology) for the language pair
+    currently selected in the main window, and pushes it to Palabra's
+    glossary REST API (see app/glossary.py).
+
+    There's no server-side "edit" available for an existing glossary
+    (confirmed against the real API -- see glossary.py's own docstring):
+    every Save deletes whatever glossary previously represented this
+    language pair (if any) and uploads a fresh one with the current list.
+    Local edits (Dodaj/Usuń) are saved to disk immediately so they
+    survive closing the dialog without Save, but only take effect in
+    actual translations once pushed -- see the status label.
+    """
+
+    def __init__(self, source_lang: str, target_lang: str, source_lang_name: str, target_lang_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("Glosariusz"))
+        self._source_lang = source_lang
+        self._target_lang = target_lang
+        self._pairs, self._glossary_id = config.load_glossary_entries(source_lang, target_lang)
+        self._dirty = False  # local edits made since the last successful save to Palabra
+        self._saver_worker: GlossarySaver | None = None
+        self._saver_thread: threading.Thread | None = None
+
+        pair_label = QLabel(f"{tr('Para językowa')}: {source_lang_name} → {target_lang_name}")
+        pair_label.setStyleSheet("font-weight: bold;")
+
+        hint = QLabel(
+            tr(
+                "Wymusza dokładne tłumaczenie podanych słów/fraz (np. imion biblijnych) zamiast"
+                " tego, co Palabra przetłumaczyłaby sama. Dotyczy tylko powyższej pary językowej --"
+                " dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu."
+            )
+        )
+        hint.setWordWrap(True)
+
+        self.list_widget = QListWidget()
+        self._refresh_list()
+
+        add_row = QHBoxLayout()
+        self.source_edit = QLineEdit()
+        self.source_edit.setPlaceholderText(tr("Słowo źródłowe (np. Jehowa)"))
+        self.target_edit = QLineEdit()
+        self.target_edit.setPlaceholderText(tr("Tłumaczenie (np. Jehovah)"))
+        add_row.addWidget(self.source_edit)
+        add_row.addWidget(self.target_edit)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton(tr("Dodaj"))
+        add_btn.clicked.connect(self._on_add)
+        remove_btn = QPushButton(tr("Usuń zaznaczone"))
+        remove_btn.clicked.connect(self._on_remove)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch()
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+
+        save_row = QHBoxLayout()
+        self.save_btn = QPushButton(tr("Zapisz w Palabra"))
+        self.save_btn.clicked.connect(self._on_save)
+        close_btn = QPushButton(tr("Zamknij"))
+        close_btn.clicked.connect(self.close)
+        save_row.addWidget(self.save_btn)
+        save_row.addStretch()
+        save_row.addWidget(close_btn)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(pair_label)
+        layout.addWidget(hint)
+        layout.addWidget(self.list_widget)
+        layout.addLayout(add_row)
+        layout.addLayout(btn_row)
+        layout.addWidget(self.status_label)
+        layout.addLayout(save_row)
+
+        self._update_status_label()
+
+    def _refresh_list(self) -> None:
+        self.list_widget.clear()
+        for src, tgt in self._pairs:
+            self.list_widget.addItem(f"{src} → {tgt}")
+
+    def _update_status_label(self) -> None:
+        if self._dirty:
+            self.status_label.setStyleSheet("color: #b06a00;")
+            self.status_label.setText(
+                tr('Niezapisane zmiany -- kliknij "Zapisz w Palabra", żeby zaczęły obowiązywać.')
+            )
+        elif self._glossary_id is not None:
+            self.status_label.setStyleSheet("color: #2a7a2a;")
+            self.status_label.setText(tr("Aktywny w Palabra."))
+        else:
+            self.status_label.setStyleSheet("")
+            self.status_label.setText(tr("Brak aktywnego glosariusza dla tej pary językowej."))
+
+    def _on_add(self) -> None:
+        src = self.source_edit.text().strip()
+        tgt = self.target_edit.text().strip()
+        if not src or not tgt:
+            QMessageBox.warning(self, tr("Brak danych"), tr("Podaj słowo źródłowe i jego tłumaczenie."))
+            return
+        self._pairs.append((src, tgt))
+        self._dirty = True
+        config.save_glossary_entries(self._source_lang, self._target_lang, self._pairs, self._glossary_id)
+        self.source_edit.clear()
+        self.target_edit.clear()
+        self._refresh_list()
+        self._update_status_label()
+
+    def _on_remove(self) -> None:
+        row = self.list_widget.currentRow()
+        if row < 0:
+            return
+        del self._pairs[row]
+        self._dirty = True
+        config.save_glossary_entries(self._source_lang, self._target_lang, self._pairs, self._glossary_id)
+        self._refresh_list()
+        self._update_status_label()
+
+    def _on_save(self) -> None:
+        creds = config.load_credentials()
+        if not creds.api_key:
+            QMessageBox.warning(
+                self, tr("Brak klucza"), tr("Ustaw klucz API w Ustawieniach przed zapisem glosariusza.")
+            )
+            return
+        self.save_btn.setEnabled(False)
+        self.status_label.setStyleSheet("")
+        self.status_label.setText(tr("Zapisywanie..."))
+
+        worker = GlossarySaver(
+            creds.api_key, "CRC Translator", self._source_lang, self._target_lang,
+            list(self._pairs), self._glossary_id,
+        )
+        worker.finished.connect(self._on_save_finished, Qt.ConnectionType.QueuedConnection)
+        thread = threading.Thread(target=worker.run, daemon=True)
+        self._saver_worker = worker
+        self._saver_thread = thread
+        thread.start()
+
+    def _on_save_finished(self, ok: bool, message: str, new_glossary_id: object) -> None:
+        self.save_btn.setEnabled(True)
+        if ok:
+            self._glossary_id = new_glossary_id
+            self._dirty = False
+            config.save_glossary_entries(self._source_lang, self._target_lang, self._pairs, self._glossary_id)
+            self.status_label.setStyleSheet("color: #2a7a2a;")
+            self.status_label.setText(f"✓ {message}")
+        else:
+            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setText(f"✗ {message}")
 
 
 @dataclass
@@ -944,6 +1138,16 @@ class MainWindow(QMainWindow):
         self.target_lang_combo.setCurrentIndex([c for c, _ in TARGET_LANGUAGES].index(DEFAULT_TARGET))
         form.addRow(tr("Język docelowy:"), self.target_lang_combo)
 
+        self.manage_glossary_btn = QPushButton(tr("Glosariusz..."))
+        self.manage_glossary_btn.setToolTip(
+            tr(
+                "Wymuś własne tłumaczenie konkretnych słów/imion (np. biblijnych) dla obecnie"
+                " wybranej pary językowej -- zamiast tego, co Palabra przetłumaczyłaby sama."
+            )
+        )
+        self.manage_glossary_btn.clicked.connect(self._on_manage_glossary)
+        form.addRow("", self.manage_glossary_btn)
+
         self.voice_combo = QComboBox()
         self.voice_combo.currentIndexChanged.connect(self._on_voice_mode_changed)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_selection_changed)
@@ -1113,6 +1317,7 @@ class MainWindow(QMainWindow):
             self.voice_custom_edit,
             self.manage_voices_btn,
             self.refresh_devices_btn,
+            self.manage_glossary_btn,
         ]
 
         self._apply_saved_app_settings(config.load_app_settings())
@@ -1302,6 +1507,15 @@ class MainWindow(QMainWindow):
     def _on_manage_voices(self) -> None:
         SavedVoicesDialog(self).exec()
         self._rebuild_voice_combo()
+
+    def _on_manage_glossary(self) -> None:
+        source_lang = self.source_lang_combo.currentData()
+        target_lang = self.target_lang_combo.currentData()
+        GlossaryDialog(
+            source_lang, target_lang,
+            self.source_lang_combo.currentText(), self.target_lang_combo.currentText(),
+            self,
+        ).exec()
 
     def _on_mic_selection_changed(self, _index: int) -> None:
         # Repopulating the channel combo for the newly selected device must

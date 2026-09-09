@@ -21,6 +21,7 @@ APP_SETTINGS_PATH = CONFIG_DIR / "app_settings.json"
 BALANCE_PATH = CONFIG_DIR / "balance.json"
 SESSION_HISTORY_PATH = CONFIG_DIR / "session_history.json"
 MAX_SESSION_HISTORY_ENTRIES = 200  # avoid unbounded growth over months of use
+GLOSSARY_PATH = CONFIG_DIR / "glossary.json"
 
 DEFAULT_REGION = "eu"
 
@@ -251,3 +252,62 @@ def save_saved_voices(voices: list[dict[str, str]]) -> None:
     """Writes the named voice_id presets to disk as JSON."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     SAVED_VOICES_PATH.write_text(json.dumps(voices, indent=2), encoding="utf-8")
+
+
+def _glossary_key(source_lang: str, target_lang: str) -> str:
+    # A Palabra "translation"-type glossary is tied to one specific
+    # (source_lang, target_lang) pair (see app/glossary.py) -- keyed the
+    # same way here so each language pair the user actually translates
+    # keeps its own independent word list and remote glossary_id.
+    return f"{source_lang}->{target_lang}"
+
+
+def load_glossary_entries(source_lang: str, target_lang: str) -> tuple[list[tuple[str, str]], str | None]:
+    """Reads the local word-pair list and last-synced glossary_id for one
+    language pair. Returns ([], None) if none saved yet, or the file is
+    missing/corrupt -- this is edited interactively (GlossaryDialog), so a
+    bad file should start the user from an empty list rather than block
+    the app."""
+    if not GLOSSARY_PATH.exists():
+        return [], None
+    try:
+        data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return [], None
+    if not isinstance(data, dict):
+        return [], None
+    entry = data.get(_glossary_key(source_lang, target_lang))
+    if not isinstance(entry, dict):
+        return [], None
+    raw_pairs = entry.get("pairs")
+    pairs: list[tuple[str, str]] = []
+    if isinstance(raw_pairs, list):
+        for p in raw_pairs:
+            if isinstance(p, list) and len(p) == 2 and all(isinstance(x, str) for x in p):
+                pairs.append((p[0], p[1]))
+    glossary_id = entry.get("glossary_id")
+    return pairs, glossary_id if isinstance(glossary_id, str) else None
+
+
+def save_glossary_entries(
+    source_lang: str, target_lang: str, pairs: list[tuple[str, str]], glossary_id: str | None
+) -> None:
+    """Writes the word-pair list and current remote glossary_id (or None,
+    if nothing has been successfully synced to Palabra yet / it was
+    cleared) for one language pair, leaving every other pair's entry in
+    the file untouched."""
+    if GLOSSARY_PATH.exists():
+        try:
+            data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    else:
+        data = {}
+    data[_glossary_key(source_lang, target_lang)] = {
+        "pairs": [list(p) for p in pairs],
+        "glossary_id": glossary_id,
+    }
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    GLOSSARY_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

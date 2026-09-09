@@ -15,8 +15,10 @@ _current_lang = LANG_PL
 
 _TRANSLATIONS: dict[str, str] = {
     "(nie wybrano pliku)": "(no file selected)",
+    "Aktywny w Palabra.": "Active in Palabra.",
     "Audio/Video": "Audio/Video",
     "Brak ID głosu": "No voice ID",
+    "Brak aktywnego glosariusza dla tej pary językowej.": "No active glossary for this language pair.",
     "Brak błędów": "No errors",
     "Brak danych": "Missing data",
     "Brak klucza": "No key",
@@ -57,6 +59,8 @@ _TRANSLATIONS: dict[str, str] = {
         "translation from a speaker) — start with a low value (15-20%) and increase "
         "only if needed."
     ),
+    "Glosariusz": "Glossary",
+    "Glosariusz...": "Glossary...",
     "Gotowy": "Ready",
     "Głos:": "Voice:",
     "Głośność mikrofonu:": "Microphone volume:",
@@ -76,6 +80,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Język aplikacji:": "App language:",
     "Język docelowy:": "Target language:",
     "Język źródłowy:": "Source language:",
+    "Kanał": "Channel",
     "Klonowanie głosu mówcy (eksperymentalne)": "Speaker voice cloning (experimental)",
     "Klucz API Palabra:": "Palabra API key:",
     "Klucz API działa poprawnie.": "The API key works correctly.",
@@ -95,6 +100,12 @@ _TRANSLATIONS: dict[str, str] = {
         "if audio stops working.\n\n"
         "Close anyway?"
     ),
+    "Który kanał wejściowy tego urządzenia nagrywać (dla interfejsów z więcej niż jednym wejściem).": (
+        "Which input channel of this device to record (for interfaces with more than one input)."
+    ),
+    "Lista jest pusta -- glosariusz wyłączony dla tej pary językowej.": (
+        "The list is empty -- glossary disabled for this language pair."
+    ),
     "Mikrofon:": "Microphone:",
     "Nazwa (np. Lektor)": "Name (e.g. Narrator)",
     "Nie ma jeszcze żadnej transkrypcji do zapisania.": "There's no transcript to save yet.",
@@ -112,6 +123,9 @@ _TRANSLATIONS: dict[str, str] = {
     "Nieprawidłowy klucz API": "Invalid API key",
     "Nieprawidłowy plik": "Invalid file",
     "Nieprzezroczystość tła:": "Background opacity:",
+    'Niezapisane zmiany -- kliknij "Zapisz w Palabra", żeby zaczęły obowiązywać.': (
+        'Unsaved changes -- click "Save to Palabra" for them to take effect.'
+    ),
     "Odczep okienko z tłumaczeniem": "Detach translation window",
     "Odebrane przetłumaczone audio nie jest odtwarzane na wybrane wyjście -- zostaje "
     "tylko tekst (log/overlay). Palabra API nie oferuje trybu bez syntezy mowy, więc "
@@ -135,6 +149,7 @@ _TRANSLATIONS: dict[str, str] = {
     ),
     "Otwórz log błędów": "Open error log",
     "Otwórz panel Palabra (saldo, użycie)": "Open Palabra dashboard (balance, usage)",
+    "Para językowa": "Language pair",
     "Pauza": "Pause",
     "Pauza pliku": "Pause file",
     "Plik (opcjonalnie):": "File (optional):",
@@ -144,6 +159,7 @@ _TRANSLATIONS: dict[str, str] = {
     ),
     "Podaj klucz API przed zapisaniem.": "Enter an API key before saving.",
     "Podaj nazwę i ID głosu.": "Enter a name and a voice ID.",
+    "Podaj słowo źródłowe i jego tłumaczenie.": "Enter a source word and its translation.",
     "Podgląd tłumaczenia": "Translation preview",
     "Pokaż w logu:": "Show in log:",
     "Pokaż:": "Show:",
@@ -182,6 +198,7 @@ _TRANSLATIONS: dict[str, str] = {
         "reality. Enter the current value from the Palabra dashboard here to "
         "resync."
     ),
+    "Słowo źródłowe (np. Jehowa)": "Source word (e.g. Jehovah)",
     "Testowanie...": "Testing...",
     "Testuj klucz": "Test key",
     "Testuj wyjście": "Test output",
@@ -189,7 +206,11 @@ _TRANSLATIONS: dict[str, str] = {
     "Tylko tłumaczenie": "Translation only",
     "Tylko źródłowy": "Source only",
     "Tłumaczenie": "Translation",
+    "Tłumaczenie (np. Jehovah)": "Translation (e.g. Jehovah)",
     "Ustaw klucz API w Ustawieniach przed rozpoczęciem.": "Set an API key in Settings before starting.",
+    "Ustaw klucz API w Ustawieniach przed zapisem glosariusza.": (
+        "Set an API key in Settings before saving the glossary."
+    ),
     "Ustawienia": "Settings",
     "Ustawienia wyglądu": "Appearance settings",
     "Ustawienia wyglądu overlay...": "Overlay appearance settings...",
@@ -199,6 +220,7 @@ _TRANSLATIONS: dict[str, str] = {
         "Delete the entire saved session history? This cannot be undone."
     ),
     "Usuń wybrany plik": "Remove the selected file",
+    "Usuń zaznaczone": "Remove selected",
     "Usuń zaznaczony": "Remove selected",
     "Wpisz klucz API przed testem.": "Enter an API key before testing.",
     "Wstrzymuje/wznawia całą sesję (mikrofon i plik, jeśli jest), niezależnie od stanu pliku. (F6)": (
@@ -220,6 +242,19 @@ _TRANSLATIONS: dict[str, str] = {
     "Wyczyścić historię?": "Clear history?",
     "Wyczyść historię": "Clear history",
     "Wyczyść transkrypcję": "Clear transcript",
+    "Wymusza dokładne tłumaczenie podanych słów/fraz (np. imion biblijnych) zamiast"
+    " tego, co Palabra przetłumaczyłaby sama. Dotyczy tylko powyższej pary językowej --"
+    " dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu.": (
+        "Forces exact translation of the given words/phrases (e.g. biblical names) instead"
+        " of whatever Palabra would translate them to on its own. Applies only to the"
+        " language pair above -- for a different pair, reopen this window after selecting it."
+    ),
+    "Wymuś własne tłumaczenie konkretnych słów/imion (np. biblijnych) dla obecnie"
+    " wybranej pary językowej -- zamiast tego, co Palabra przetłumaczyłaby sama.": (
+        "Force your own translation of specific words/names (e.g. biblical) for the"
+        " currently selected language pair -- instead of whatever Palabra would translate"
+        " them to on its own."
+    ),
     "Wyjście:": "Output:",
     "Wyłączony": "Off",
     "Wznów": "Resume",
@@ -231,8 +266,11 @@ _TRANSLATIONS: dict[str, str] = {
     "Zamykanie — kończę sesję...": "Closing — ending session...",
     "Zapisane głosy": "Saved voices",
     "Zapisane głosy...": "Saved voices...",
+    "Zapisano w Palabra.": "Saved to Palabra.",
+    "Zapisywanie...": "Saving...",
     "Zapisz transkrypcję": "Save transcript",
     "Zapisz transkrypcję...": "Save transcript...",
+    "Zapisz w Palabra": "Save to Palabra",
     "Zatrzymywanie...": "Stopping...",
     "Zawsze na wierzchu": "Always on top",
     "Zmiana języka aplikacji będzie widoczna po ponownym uruchomieniu.": (
