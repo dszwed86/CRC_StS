@@ -1138,11 +1138,20 @@ class MainWindow(QMainWindow):
         skipped) -- one stale field must never block the rest from applying.
         """
         mic_name = settings.get("mic_device_name")
+        mic_device_found = False
         if mic_name:
             idx = self.mic_combo.findText(mic_name)
             if idx >= 0:
                 self.mic_combo.setCurrentIndex(idx)
-        if "mic_channel" in settings:
+                mic_device_found = True
+        if mic_device_found and "mic_channel" in settings:
+            # Only restored when the SAVED device was actually found above
+            # -- otherwise mic_combo stayed on whatever device it already
+            # defaulted to (e.g. the saved interface is unplugged), and
+            # applying a channel meant for a DIFFERENT physical device
+            # would silently pick the wrong input on it (e.g. its Kanał 2,
+            # which could easily be dead silence) with no indication why.
+            #
             # Restored AFTER mic_name above: selecting the device already
             # rebuilt this combo's items for it (see
             # _on_mic_selection_changed -> _populate_mic_channel_combo),
@@ -1398,6 +1407,7 @@ class MainWindow(QMainWindow):
         rescan_devices()
 
         current_mic = self.mic_combo.currentData()
+        current_mic_channel = self.mic_channel_combo.currentData()
         new_input_devices = list_input_devices()
         if new_input_devices != self._input_devices:
             # Only actually touch the combo (clear + repopulate) when the
@@ -1411,6 +1421,18 @@ class MainWindow(QMainWindow):
                 self.mic_combo.addItem(d.name, d.index)
             idx = self.mic_combo.findData(current_mic)
             self.mic_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            # Restoring the device above already rebuilt the channel combo
+            # for it (see _on_mic_selection_changed ->
+            # _populate_mic_channel_combo), resetting it to the default
+            # item -- without this, ANY device-list change (a headset
+            # plugged in elsewhere, Steam/Sonar adding a virtual device,
+            # this timer firing every 3s -- see _auto_refresh_devices)
+            # silently reset an explicitly chosen channel back to "Kanał 1"
+            # for the same still-selected device.
+            for i in range(self.mic_channel_combo.count()):
+                if self.mic_channel_combo.itemData(i) == current_mic_channel:
+                    self.mic_channel_combo.setCurrentIndex(i)
+                    break
 
         current_output = self.output_combo.currentData()
         new_output_devices = list_output_devices()

@@ -197,6 +197,33 @@ def _wasapi_extra_settings() -> "sd.WasapiSettings | None":
     return None
 
 
+def _needs_resampling(device: int | None) -> int | None:
+    """Returns a device's native sample rate if it doesn't match RATE AND
+    this platform lacks WASAPI's auto_convert -- meaning PortAudio won't
+    reliably convert for us and MicStream/OutputSink must resample
+    themselves (see _LinearResampler). None otherwise: either WASAPI will
+    handle it, or the device's own rate already matches RATE, so the
+    caller should just open at RATE directly, today's untouched default.
+
+    Used for BOTH capture and playback -- confirmed via chunks()'s own
+    long-standing comment that even WASAPI's auto_convert isn't perfectly
+    real-time-accurate, so a platform with NO conversion at all (macOS)
+    plausibly has the same class of problem on input as the one a real
+    user report confirmed on output (screechy/crackling playback);
+    nothing here assumes input is fine just because nobody happened to
+    report it.
+    """
+    if _wasapi_extra_settings() is not None:
+        return None
+    try:
+        native_rate = int(round(sd.query_devices(device)["default_samplerate"]))
+    except Exception:
+        return None
+    if native_rate and native_rate != RATE:
+        return native_rate
+    return None
+
+
 def list_input_devices() -> list[DeviceInfo]:
     preferred = _preferred_hostapi_index()
     return [
@@ -325,16 +352,40 @@ class MicStream:
 
     def _open_stream(self, device: int | None) -> sd.RawInputStream:
         channel = self._channel
-        return _open_with_retry(lambda: sd.RawInputStream(
-            samplerate=RATE,
-            channels=(channel + 1) if channel is not None else CHANNELS,
-            dtype="int16",
-            device=device,
-            callback=self._make_callback(channel),
-            extra_settings=_wasapi_extra_settings(),
-        ))
+        # See _needs_resampling(): the same reasoning that produced a real,
+        # reported "screechy/crackling" bug on OutputSink's playback path
+        # (WASAPI's auto_convert covers this on Windows; nothing did on
+        # macOS) applies just as much here -- a mismatched-rate capture
+        # device would hand back pitch-shifted, crackling audio to
+        # Palabra, just less obviously than a speaker (garbled speech
+        # reads as "the ASR/translation is having a bad day", not as an
+        # audio bug). Resample capture to RATE ourselves in that case,
+        # same as OutputSink does for playback.
+        native_rate = _needs_resampling(device)
+        stream_rate = native_rate or RATE
+        resampler = _LinearResampler(native_rate, RATE) if native_rate else None
 
-    def _make_callback(self, channel: int | None) -> Callable[..., None]:
+        def _open(rate: int, resampler_for_rate: "_LinearResampler | None") -> sd.RawInputStream:
+            return _open_with_retry(lambda: sd.RawInputStream(
+                samplerate=rate,
+                channels=(channel + 1) if channel is not None else CHANNELS,
+                dtype="int16",
+                device=device,
+                callback=self._make_callback(channel, resampler_for_rate),
+                extra_settings=_wasapi_extra_settings(),
+            ))
+
+        try:
+            return _open(stream_rate, resampler)
+        except Exception:
+            if stream_rate == RATE:
+                raise
+            # Same fallback reasoning as OutputSink: the device rejected
+            # its own reported native rate -- fall back to plain RATE
+            # rather than failing to open the mic at all.
+            return _open(RATE, None)
+
+    def _make_callback(self, channel: int | None, resampler: "_LinearResampler | None") -> Callable[..., None]:
         # A fresh closure per open (not a single self._on_audio bound method
         # reading self._channel): switch_device() below can change BOTH the
         # device and the channel together, but the OLD stream keeps calling
@@ -343,15 +394,18 @@ class MicStream:
         # self._channel live, updating that attribute for the new stream
         # would retroactively (and incorrectly) change how the OLD stream's
         # still-in-flight callbacks try to de-interleave THEIR data, which
-        # was captured at the OLD channel count. Capturing `channel` here
-        # instead ties each stream to the channel count it was actually
-        # opened with, for its whole lifetime.
+        # was captured at the OLD channel count. Capturing `channel` (and,
+        # for the same reason, `resampler`) here instead ties each stream
+        # to the settings it was actually opened with, for its whole
+        # lifetime.
         def _on_audio(indata, frames, time_info, status) -> None:
             self._last_callback_at = time.monotonic()
             data = bytes(indata)
             if channel is not None and data:
                 arr = np.frombuffer(data, dtype=np.int16).reshape(-1, channel + 1)
                 data = arr[:, channel].tobytes()
+            if resampler is not None and data:
+                data = resampler.push(np.frombuffer(data, dtype=np.int16)).tobytes()
             if data:
                 self._level = min(1.0, int(np.abs(np.frombuffer(data, dtype=np.int16)).max()) / 32767)
             else:
@@ -407,15 +461,28 @@ class MicStream:
         driven by that thread's own event loop, not offloaded to a
         different one (which would need its own COM initialization).
         """
-        new_stream = await _open_with_retry_async(lambda: sd.RawInputStream(
-            samplerate=RATE,
-            channels=(channel + 1) if channel is not None else CHANNELS,
-            dtype="int16",
-            device=new_device,
-            callback=self._make_callback(channel),
-            extra_settings=_wasapi_extra_settings(),
-        ))
-        new_stream.start()
+        native_rate = _needs_resampling(new_device)
+        stream_rate = native_rate or RATE
+        resampler = _LinearResampler(native_rate, RATE) if native_rate else None
+
+        async def _open(rate: int, resampler_for_rate: "_LinearResampler | None") -> sd.RawInputStream:
+            new_stream = await _open_with_retry_async(lambda: sd.RawInputStream(
+                samplerate=rate,
+                channels=(channel + 1) if channel is not None else CHANNELS,
+                dtype="int16",
+                device=new_device,
+                callback=self._make_callback(channel, resampler_for_rate),
+                extra_settings=_wasapi_extra_settings(),
+            ))
+            new_stream.start()
+            return new_stream
+
+        try:
+            new_stream = await _open(stream_rate, resampler)
+        except Exception:
+            if stream_rate == RATE:
+                raise
+            new_stream = await _open(RATE, None)  # see _open_stream's matching fallback
         old_stream = self._stream
         self._stream = new_stream
         self._channel = channel
@@ -955,41 +1022,49 @@ class OutputSink:
         # caused an intermittent native crash: blocking a PortAudio callback on a
         # Python lock can collide with the stream's own stop()/close() teardown.
         self._clear_requested = threading.Event()
-        # WASAPI's auto_convert (see _wasapi_extra_settings) inserts its own
-        # sample-rate converter for a device whose native rate doesn't match
-        # RATE -- but that's Windows-only. Without an equivalent, CoreAudio
-        # (macOS) doesn't reliably resample a stream opened at a rate the
-        # device doesn't natively support: it can silently accept the open
-        # call while the actual hardware clock keeps running at ITS OWN
-        # rate, producing pitch-shifted, crackling playback -- confirmed as
-        # the cause of a real report (some Mac speakers/headphones sounding
-        # "screechy"/"crackly"). On any platform without WASAPI, open at the
-        # device's own native rate instead and resample our fixed-rate PCM
-        # to it ourselves.
-        output_rate = RATE
-        self._resampler: _LinearResampler | None = None
-        if _wasapi_extra_settings() is None:
-            try:
-                native_rate = int(round(sd.query_devices(device)["default_samplerate"]))
-            except Exception:
-                native_rate = RATE
-            if native_rate and native_rate != RATE:
-                output_rate = native_rate
-                self._resampler = _LinearResampler(RATE, native_rate)
+        # See _needs_resampling(): WASAPI's auto_convert handles a
+        # mismatched device rate on Windows; without an equivalent,
+        # CoreAudio (macOS) doesn't reliably resample a stream opened at a
+        # rate the device doesn't natively support -- confirmed as the
+        # cause of a real report (some Mac speakers/headphones sounding
+        # "screechy"/"crackly"). Resample our fixed-rate PCM to the
+        # device's own native rate ourselves in that case.
+        native_rate = _needs_resampling(device)
+        output_rate = native_rate or RATE
+        self._resampler = _LinearResampler(RATE, native_rate) if native_rate else None
         # Scaled from MAX_OUTPUT_BACKLOG_SAMPLES (defined at RATE) to
         # output_rate, so the ~1.2s backlog cap (see _trim_backlog) means
         # the same thing in wall-clock time whether or not resampling is
         # active -- self._q holds samples at output_rate now, not always
         # RATE.
         self._max_backlog_samples = int(MAX_OUTPUT_BACKLOG_SAMPLES * output_rate / RATE)
-        self._stream = _open_with_retry(lambda: sd.OutputStream(
-            samplerate=output_rate,
-            channels=CHANNELS,
-            dtype="int16",
-            device=device,
-            callback=self._on_playback,
-            extra_settings=_wasapi_extra_settings(),
-        ))
+
+        def _open(rate: int) -> sd.OutputStream:
+            return _open_with_retry(lambda: sd.OutputStream(
+                samplerate=rate,
+                channels=CHANNELS,
+                dtype="int16",
+                device=device,
+                callback=self._on_playback,
+                extra_settings=_wasapi_extra_settings(),
+            ))
+
+        try:
+            self._stream = _open(output_rate)
+        except Exception:
+            if output_rate == RATE:
+                raise
+            # The device rejected its own reported native rate (a stale or
+            # wrong query result, or the rate changed underneath us --
+            # e.g. a Bluetooth device switching profiles). Fall back to
+            # the plain RATE that always worked before this resampling
+            # was added, rather than failing to start the session at all
+            # -- the original screechy-audio bug this exists to fix beats
+            # no audio whatsoever.
+            output_rate = RATE
+            self._resampler = None
+            self._max_backlog_samples = MAX_OUTPUT_BACKLOG_SAMPLES
+            self._stream = _open(RATE)
 
     @property
     def level(self) -> float:
