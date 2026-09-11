@@ -1161,10 +1161,29 @@ class MainWindow(QMainWindow):
         form = QFormLayout(source_group)
 
         self.mic_combo = QComboBox()
+        # Device names are arbitrary and sometimes very long (real examples
+        # seen on this app's own dev/test machines: a ~70-character virtual
+        # audio device name on Windows, similarly long Bluetooth/interface
+        # names on macOS). QComboBox's default AdjustToContentsOnFirstShow
+        # policy sizes the box (and therefore the whole window, since
+        # nothing here scrolls -- see MainWindow's layout) to fit the
+        # WIDEST item, which made the window unable to shrink below ~1500px
+        # wide on a machine with one such device plugged in -- wider than
+        # many laptop screens (confirmed: this is what "the window doesn't
+        # fit on my Mac" traced back to). Cap the combo's own width instead;
+        # the current selection still elides with "..." if too long to
+        # display, and the full name remains visible via the tooltip below
+        # and in the dropdown popup itself.
+        self.mic_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.mic_combo.setMinimumContentsLength(24)
         self._input_devices = list_input_devices()
         for d in self._input_devices:
             self.mic_combo.addItem(d.name, d.index)
         self.mic_combo.currentIndexChanged.connect(self._on_mic_selection_changed)
+        self.mic_combo.currentIndexChanged.connect(
+            lambda _i: self.mic_combo.setToolTip(self.mic_combo.currentText())
+        )
+        self.mic_combo.setToolTip(self.mic_combo.currentText())
 
         # Only shown for a device with more than one input channel (e.g. a
         # 2-in audio interface like a Behringer UMC202HD, with two
@@ -1320,16 +1339,26 @@ class MainWindow(QMainWindow):
         form = QFormLayout(output_group)
 
         self.output_combo = QComboBox()
+        # Same fix as mic_combo above (see its comment) -- device names can
+        # be arbitrarily long and this combo hit the exact same
+        # window-too-wide-to-fit-the-screen problem.
+        self.output_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.output_combo.setMinimumContentsLength(24)
         self._output_devices = list_output_devices()
         cable = find_virtual_cable(self._output_devices)
         for d in self._output_devices:
             self.output_combo.addItem(d.name, d.index)
+        self.output_combo.currentIndexChanged.connect(
+            lambda _i: self.output_combo.setToolTip(self.output_combo.currentText())
+        )
+        self.output_combo.setToolTip(self.output_combo.currentText())
         self.output_hint = QLabel(
             tr(
                 "Nie wykryto wirtualnego kabla audio (VB-Cable / BlackHole)."
                 " Zainstaluj go, aby OBS mógł odebrać tłumaczenie — patrz README."
             )
         )
+        self.output_hint.setWordWrap(True)
         self.output_hint.setStyleSheet("color: #b06a00;")
         if cable is not None:
             self.output_combo.setCurrentIndex(self._output_devices.index(cable))
@@ -1525,6 +1554,13 @@ class MainWindow(QMainWindow):
         log_filter_row.addStretch()
         root.addLayout(log_filter_row)
 
+        # Split across two rows, not one: five buttons with full Polish
+        # labels side by side forced the window's minimum width to ~1500px
+        # (each button's own minimumSizeHint refuses to shrink below its
+        # label), which didn't fit on a smaller laptop screen (confirmed:
+        # this and the two device-name combos above were what "the window
+        # doesn't fit on my Mac" traced back to). Two shorter rows roughly
+        # halves that.
         overlay_row = QHBoxLayout()
         overlay_row.addStretch()
         self.overlay_btn = QPushButton(tr("Odczep okienko z tłumaczeniem"))
@@ -1533,17 +1569,21 @@ class MainWindow(QMainWindow):
         self.overlay_settings_btn = QPushButton(tr("Ustawienia wyglądu overlay..."))
         self.overlay_settings_btn.clicked.connect(self._on_open_overlay_settings)
         overlay_row.addWidget(self.overlay_settings_btn)
+        root.addLayout(overlay_row)
+
+        transcript_row = QHBoxLayout()
+        transcript_row.addStretch()
         self.save_transcript_btn = QPushButton(tr("Zapisz transkrypcję..."))
         self.save_transcript_btn.clicked.connect(self._on_save_transcript)
-        overlay_row.addWidget(self.save_transcript_btn)
+        transcript_row.addWidget(self.save_transcript_btn)
         self.clear_transcript_btn = QPushButton(tr("Wyczyść transkrypcję"))
         self.clear_transcript_btn.clicked.connect(self._on_clear_transcript)
-        overlay_row.addWidget(self.clear_transcript_btn)
+        transcript_row.addWidget(self.clear_transcript_btn)
         self.open_error_log_btn = QPushButton(tr("Otwórz log błędów"))
         self.open_error_log_btn.setToolTip(tr("Otwiera ~/.sts_bridge/errors.log w domyślnym edytorze tekstu."))
         self.open_error_log_btn.clicked.connect(self._on_open_error_log)
-        overlay_row.addWidget(self.open_error_log_btn)
-        root.addLayout(overlay_row)
+        transcript_row.addWidget(self.open_error_log_btn)
+        root.addLayout(transcript_row)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
