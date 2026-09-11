@@ -1750,6 +1750,18 @@ class MainWindow(QMainWindow):
                     idx = i
                     break
             self.voice_combo.setCurrentIndex(idx)
+        else:
+            # current is None only on this combo's very first-ever build (see
+            # above) -- before _apply_saved_app_settings() gets a chance to
+            # restore a previously saved choice, so this only ends up being
+            # the ACTUAL default on a fresh install (or if voice_kind was
+            # never saved). Default to DEFAULT_VOICE_ID instead of leaving
+            # Qt's implicit first item ("Domyślny (auto)") selected -- see
+            # its definition in config.py for why.
+            for i in range(self.voice_combo.count()):
+                if self.voice_combo.itemData(i) == ("id", config.DEFAULT_VOICE_ID):
+                    self.voice_combo.setCurrentIndex(i)
+                    break
         self.voice_combo.blockSignals(False)
         self._on_voice_mode_changed(self.voice_combo.currentIndex())
 

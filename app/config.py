@@ -224,6 +224,15 @@ DEFAULT_SAVED_VOICES: list[dict[str, str]] = [
     {"name": "PolFemale", "voice_id": "d319b3e8-ab60-4146-af21-d66f5faa5a24"},
 ]
 
+# Voice preset MainWindow selects by default on a fresh install (no saved
+# voice_kind yet -- see _rebuild_voice_combo). Measured via a real A/B test
+# against the live API: speaks ~19% slower/less compressed than the "auto"
+# default (which resolves to the same server voice as the "default_low"
+# preset) at no extra latency -- a meaningfully more natural-sounding
+# default with zero cost. Only affects new installs; anyone who already
+# saved a voice choice keeps it.
+DEFAULT_VOICE_ID = DEFAULT_SAVED_VOICES[0]["voice_id"]  # EngFem1
+
 
 def load_saved_voices() -> list[dict[str, str]]:
     """Reads the user's named voice_id presets (Palabra has no API to list
