@@ -226,12 +226,13 @@ DEFAULT_SAVED_VOICES: list[dict[str, str]] = [
 
 # Voice preset MainWindow selects by default on a fresh install (no saved
 # voice_kind yet -- see _rebuild_voice_combo). Measured via a real A/B test
-# against the live API: speaks ~19% slower/less compressed than the "auto"
-# default (which resolves to the same server voice as the "default_low"
-# preset) at no extra latency -- a meaningfully more natural-sounding
-# default with zero cost. Only affects new installs; anyone who already
-# saved a voice choice keeps it.
-DEFAULT_VOICE_ID = DEFAULT_SAVED_VOICES[0]["voice_id"]  # EngFem1
+# against the live API: EngMale2 speaks ~10% slower/less compressed than the
+# "auto" default (which resolves to the same server voice as the
+# "default_low" preset) at no extra latency -- a more natural-sounding male
+# default with zero cost. (EngFem1 measured even better, ~19% slower, but
+# the user wants a male voice by default.) Only affects new installs;
+# anyone who already saved a voice choice keeps it.
+DEFAULT_VOICE_ID = next(v["voice_id"] for v in DEFAULT_SAVED_VOICES if v["name"] == "EngMale2")
 
 
 def load_saved_voices() -> list[dict[str, str]]:
