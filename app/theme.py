@@ -39,11 +39,20 @@ QSS = f"""
 }}
 
 QWidget {{
-    background-color: {BG_BASE};
     selection-background-color: {ACCENT};
     selection-color: {ACCENT_TEXT};
 }}
 
+/* Deliberately NOT a blanket "QWidget {{ background-color: ... }}" rule --
+   this app nests plain QWidgets purely for layout inside QGroupBox panels
+   (mic_gain_row, file_row, the "Zaawansowane" panel, ...), and a blanket
+   background painted every one of those its own flat BG_BASE instead of
+   showing the group box's own BG_PANEL through, which read as a visible
+   mismatched-color seam cutting across otherwise-continuous panels (a real
+   user report). Only paint a background where one is actually meant to be
+   visible: the top-level window/dialog canvas and QGroupBox's own panel
+   below -- everything else stays transparent and shows its ancestor's
+   already-painted background through, same as plain (non-stylesheet) Qt. */
 QMainWindow, QDialog {{
     background-color: {BG_BASE};
 }}
