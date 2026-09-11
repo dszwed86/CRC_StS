@@ -31,10 +31,21 @@ ACCENT = "#D9A544"
 ACCENT_HOVER = "#E6B769"
 ACCENT_PRESSED = "#C0902F"
 ACCENT_TEXT = "#1A1300"  # dark text on top of a filled-accent control
+# Status colors for text/messages set via per-widget setStyleSheet() calls
+# scattered across gui.py (error/success text in dialogs, the update-check
+# link, ...) -- brightened versions of colors this app already used before
+# the dark theme existed. The originals (e.g. "#b02a2a" red) were tuned for
+# a light background and measured well under WCAG's 4.5:1 minimum once this
+# theme's near-black backgrounds shipped (as low as 2.46:1 for red-on-red
+# where the status banner below is also red-tinted) -- a real accessibility
+# regression, not a deliberate look.
+DANGER = "#FF6B6B"
+SUCCESS = "#5EC269"
+WARNING = "#E0A33A"
+LINK = "#6FA8F5"
 
 QSS = f"""
 * {{
-    font-size: 10pt;
     color: {TEXT_PRIMARY};
 }}
 
@@ -91,6 +102,17 @@ QGroupBox::title {{
     background-color: {BG_BASE};
 }}
 
+/* The "Zaawansowane" disclosure panel's own card -- same panel background/
+   border/radius as a QGroupBox above it, but as a plain QFrame (see
+   advanced_panel's construction) since its "title" is the toggle button
+   above it, not a QGroupBox's own title notch. */
+QFrame#advancedPanel {{
+    background-color: {BG_PANEL};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 6px;
+}}
+
 /* -- Buttons: quiet/outlined by default; the one true "go" action
    (Start/Stop) opts into the filled accent look via objectName. -- */
 QPushButton {{
@@ -113,6 +135,16 @@ QPushButton:pressed {{
 QPushButton:disabled {{
     color: {TEXT_DISABLED};
     border-color: {BORDER_SUBTLE};
+}}
+
+/* Once a widget's border/background are styled via QSS at all, Qt stops
+   drawing its native keyboard-focus rectangle there and nothing replaces
+   it -- confirmed directly (tabbing through the window, every button and
+   checkbox showed hasFocus() == True with zero visible difference), which
+   left keyboard navigation effectively silent for every button and
+   checkbox in the app. */
+QPushButton:focus {{
+    border-color: {ACCENT};
 }}
 
 QPushButton#primaryButton {{
@@ -153,7 +185,6 @@ QPushButton#advancedToggle {{
 QPushButton#advancedToggle:hover {{
     background-color: {BG_RAISED};
     color: {TEXT_PRIMARY};
-    border-color: transparent;
 }}
 
 QPushButton#advancedToggle:checked {{
@@ -161,7 +192,7 @@ QPushButton#advancedToggle:checked {{
 }}
 
 /* -- Inputs -- */
-QLineEdit, QPlainTextEdit, QListWidget, QComboBox {{
+QLineEdit, QPlainTextEdit, QListWidget, QComboBox, QSpinBox, QDoubleSpinBox {{
     background-color: {BG_RAISED};
     color: {TEXT_PRIMARY};
     border: 1px solid {BORDER};
@@ -174,11 +205,11 @@ QPlainTextEdit, QListWidget {{
     padding: 8px;
 }}
 
-QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{
+QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
     border-color: {ACCENT};
 }}
 
-QLineEdit:disabled, QComboBox:disabled {{
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
     color: {TEXT_DISABLED};
     border-color: {BORDER_SUBTLE};
 }}
@@ -186,6 +217,22 @@ QLineEdit:disabled, QComboBox:disabled {{
 QComboBox::drop-down {{
     border: none;
     width: 22px;
+}}
+
+/* Styling ::drop-down at all (even just border/width above) makes Qt stop
+   drawing its native arrow glyph there -- with no ::down-arrow rule to
+   replace it, every combo box in the app rendered as a bare rectangle
+   indistinguishable from a QLineEdit, with no visual hint it opens a list
+   (a real user-visible defect). A small triangle built from transparent
+   side borders around a zero-size box -- the standard way to draw one in
+   Qt's CSS-subset style sheets without needing an image asset. */
+QComboBox::down-arrow {{
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {TEXT_SECONDARY};
+    margin-right: 8px;
 }}
 
 QComboBox QAbstractItemView {{
@@ -221,6 +268,10 @@ QCheckBox::indicator:checked {{
 
 QCheckBox::indicator:disabled {{
     border-color: {BORDER_SUBTLE};
+}}
+
+QCheckBox::indicator:focus {{
+    border-color: {ACCENT};
 }}
 
 /* -- Sliders: thin groove, round accent handle -- the one place the
@@ -294,6 +345,22 @@ QScrollBar::handle:horizontal {{
 
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
     width: 0;
+}}
+
+/* Qt only paints sub-controls a stylesheet actually names once it takes
+   over a scrollbar's rendering at all -- leaving add-page/sub-page (the
+   track on either side of the handle) and the little square where a
+   vertical and horizontal scrollbar meet unstyled rendered as a light
+   checkerboard placeholder pattern on this dark background, on every
+   scrollable area in the app (a real user-visible defect, not a deliberate
+   look). Painting them the same as the scrollbar's own background makes
+   the track read as one continuous strip behind the handle. */
+QScrollBar::add-page, QScrollBar::sub-page {{
+    background-color: {BG_PANEL};
+}}
+
+QAbstractScrollArea::corner {{
+    background-color: {BG_PANEL};
 }}
 
 QMenu {{

@@ -306,7 +306,7 @@ class SettingsDialog(QDialog):
         thread.start()
 
     def _on_test_finished(self, ok: bool, message: str) -> None:
-        self.test_result_label.setStyleSheet("color: #2a7a2a;" if ok else "color: #b02a2a;")
+        self.test_result_label.setStyleSheet(f"color: {theme.SUCCESS};" if ok else f"color: {theme.DANGER};")
         self.test_result_label.setText(("✓ " if ok else "✗ ") + message)
         self.test_btn.setEnabled(True)
         self._test_worker = None
@@ -563,12 +563,12 @@ class GlossaryDialog(QDialog):
 
     def _update_status_label(self) -> None:
         if self._dirty:
-            self.status_label.setStyleSheet("color: #b06a00;")
+            self.status_label.setStyleSheet(f"color: {theme.WARNING};")
             self.status_label.setText(
                 tr('Niezapisane zmiany -- kliknij "Zapisz w Palabra", żeby zaczęły obowiązywać.')
             )
         elif self._glossary_id is not None:
-            self.status_label.setStyleSheet("color: #2a7a2a;")
+            self.status_label.setStyleSheet(f"color: {theme.SUCCESS};")
             self.status_label.setText(tr("Aktywny w Palabra."))
         else:
             self.status_label.setStyleSheet("")
@@ -645,10 +645,10 @@ class GlossaryDialog(QDialog):
             config.save_glossary_entries(
                 self._source_lang, self._target_lang, self._pairs, self._glossary_id, synced_pairs=sent_pairs
             )
-            self.status_label.setStyleSheet("color: #2a7a2a;")
+            self.status_label.setStyleSheet(f"color: {theme.SUCCESS};")
             self.status_label.setText(f"✓ {message}")
         else:
-            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setStyleSheet(f"color: {theme.DANGER};")
             self.status_label.setText(f"✗ {message}")
 
     def _on_manage_all(self) -> None:
@@ -722,7 +722,7 @@ class GlossaryManagerDialog(QDialog):
     def _refresh(self) -> None:
         creds = config.load_credentials()
         if not creds.api_key:
-            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setStyleSheet(f"color: {theme.DANGER};")
             self.status_label.setText(tr("Ustaw klucz API w Ustawieniach przed zarządzaniem glosariuszami."))
             return
         self.refresh_btn.setEnabled(False)
@@ -743,7 +743,7 @@ class GlossaryManagerDialog(QDialog):
         self._list_worker = None
         self._list_thread = None
         if not ok:
-            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setStyleSheet(f"color: {theme.DANGER};")
             self.status_label.setText(f"✗ {message}")
             return
         self._glossaries = items or []
@@ -791,7 +791,7 @@ class GlossaryManagerDialog(QDialog):
         if not ok:
             self.refresh_btn.setEnabled(True)
             self.delete_btn.setEnabled(True)
-            self.status_label.setStyleSheet("color: #b02a2a;")
+            self.status_label.setStyleSheet(f"color: {theme.DANGER};")
             self.status_label.setText(f"✗ {message}")
             return
         # Keeps any already-open GlossaryDialog for this language pair from
@@ -1049,15 +1049,15 @@ _STATE_LABELS = {
 # tally light is for. Background tints are the dot color darkened toward
 # theme.BG_PANEL, not the flat accent, so status_label's text stays legible
 # on top of them.
-_STATUS_DOT_IDLE_COLOR = "#5B6068"
+_STATUS_DOT_IDLE_COLOR = theme.TEXT_DISABLED
 _STATUS_BANNER_IDLE_BG = theme.BG_PANEL
 _STATUS_DOT_COLORS = {
-    SessionState.CONNECTING: "#D9A544",
-    SessionState.RECONNECTING: "#b02a2a",
+    SessionState.CONNECTING: theme.ACCENT,
+    SessionState.RECONNECTING: theme.DANGER,
     SessionState.RUNNING: "#4caf50",
-    SessionState.PAUSED: "#D9A544",
+    SessionState.PAUSED: theme.ACCENT,
     SessionState.STOPPED: _STATUS_DOT_IDLE_COLOR,
-    SessionState.ERROR: "#b02a2a",
+    SessionState.ERROR: theme.DANGER,
 }
 _STATUS_BANNER_BG_COLORS = {
     SessionState.CONNECTING: "#332a16",
@@ -1095,13 +1095,17 @@ MAX_TRANSCRIPT_HISTORY_ENTRIES = 20_000
 
 # MainWindow's default open height for the settings scroll area (see
 # settings_scroll's construction): comfortably fits the collapsed default
-# view (mic/output/language, nothing exotic open -- measured at ~565px once
-# actually shown) without scrolling. Deliberately a constant here, not
-# settings_scroll's own sizeHint()/minimumSizeHint() queried at the point of
-# use -- those are measured before the window's first show() and reliably
-# underestimate this content's real height (confirmed directly: ~400px
-# pre-show vs. ~565px once settled).
-_SETTINGS_SCROLL_DESIRED_HEIGHT = 580
+# view (mic/output/language, nothing exotic open) without scrolling.
+# Deliberately a constant here, not settings_scroll's own sizeHint()/
+# minimumSizeHint() queried at the point of use -- those are measured
+# before the window's first show() and unreliable for this. Measured with
+# an isolated (no locally saved settings) fresh install, matching what a
+# real first launch actually sees: collapsed content sizeHint() is ~402px;
+# an earlier ~565px reading here turned out to be this dev machine's own
+# leftover advanced_expanded=true test state, not the true collapsed size
+# -- worth remembering since it's an easy way to re-fool this measurement
+# again (see MainWindow's "how to verify" note, if one gets added).
+_SETTINGS_SCROLL_DESIRED_HEIGHT = 460
 
 
 def _estimated_cost(seconds: float) -> float:
@@ -1186,7 +1190,7 @@ class MainWindow(QMainWindow):
         settings_row = QHBoxLayout()
         self.update_btn = QPushButton("")
         self.update_btn.setVisible(False)
-        self.update_btn.setStyleSheet("QPushButton { color: #1a73e8; border: none; text-decoration: underline; }")
+        self.update_btn.setStyleSheet(f"QPushButton {{ color: {theme.LINK}; border: none; text-decoration: underline; }}")
         self.update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_btn.clicked.connect(self._on_open_update_url)
         self._update_url: str | None = None
@@ -1407,7 +1411,7 @@ class MainWindow(QMainWindow):
             )
         )
         self.output_hint.setWordWrap(True)
-        self.output_hint.setStyleSheet("color: #b06a00;")
+        self.output_hint.setStyleSheet(f"color: {theme.WARNING};")
         if cable is not None:
             self.output_combo.setCurrentIndex(self._output_devices.index(cable))
             self.output_hint.setVisible(False)
@@ -1514,16 +1518,28 @@ class MainWindow(QMainWindow):
         # uncollapsed form made the window too tall to fit/resize on a
         # smaller laptop screen. Expand/collapse state is remembered (see
         # _save_app_settings/_apply_saved_app_settings).
-        self.advanced_toggle_btn = QPushButton(tr("▸ Zaawansowane"))
+        self.advanced_toggle_btn = QPushButton(f"▸ {tr('Zaawansowane')}")
         self.advanced_toggle_btn.setObjectName("advancedToggle")
         self.advanced_toggle_btn.setCheckable(True)
         self.advanced_toggle_btn.toggled.connect(self._on_advanced_toggled)
 
-        self.advanced_panel = QWidget()
+        # A QFrame (styled as its own small card via objectName -- see
+        # theme.py), not a bare QWidget: lying directly on the window
+        # background (unlike source_group/output_group above, both real
+        # QGroupBox panels) made this section read as visually unfinished,
+        # its hierarchy disconnected from the two panels above it.
+        self.advanced_panel = QFrame()
+        self.advanced_panel.setObjectName("advancedPanel")
         advanced_form = QFormLayout(self.advanced_panel)
         advanced_form.addRow("", self.mic_gate_row)
         advanced_form.addRow("", self.subtitles_only_check)
-        advanced_form.addRow("", self.manage_glossary_btn)
+        # Not just the bare button -- addStretch() keeps it at its natural
+        # width instead of stretching across the whole row with its label
+        # centered, which read as a text field rather than a button.
+        glossary_btn_row = QHBoxLayout()
+        glossary_btn_row.addWidget(self.manage_glossary_btn)
+        glossary_btn_row.addStretch()
+        advanced_form.addRow("", glossary_btn_row)
         advanced_form.addRow("", self.church_style_check)
         advanced_form.addRow(tr("Głos:"), voice_row)
         self.advanced_panel.setVisible(False)
@@ -1536,6 +1552,11 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.output_hint)
         settings_layout.addWidget(self.advanced_toggle_btn)
         settings_layout.addWidget(self.advanced_panel)
+        # Docks the content to the top instead of the group boxes/panel
+        # silently stretching to fill whatever extra room the scroll
+        # viewport ends up with (see settings_scroll's own stretch comment
+        # below for why that room should mostly go to the log instead).
+        settings_layout.addStretch()
 
         # Scrolls internally instead of forcing the whole window taller than
         # the screen -- the same class of bug the mic/output combo width fix
@@ -1549,6 +1570,14 @@ class MainWindow(QMainWindow):
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
         settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Never horizontal -- settings_container's own content never needs
+        # to scroll sideways (that specific failure mode is exactly what
+        # the mic/output combo width fix upstream prevents); leaving Qt's
+        # default "auto" policy showed a horizontal scrollbar (with a
+        # visible few pixels of real scroll range) at the default window
+        # size purely because the target width computed below doesn't
+        # reserve room for the vertical scrollbar's own width.
+        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         settings_scroll.setWidget(settings_container)
         self._settings_scroll = settings_scroll
         # A MAXIMUM only -- deliberately no setMinimumHeight here. A minimum
@@ -1565,18 +1594,24 @@ class MainWindow(QMainWindow):
         # not by querying this widget's own sizeHint() (see that resize()
         # call's comment for why that's unreliable pre-show).
         settings_scroll.setMaximumHeight(900)
-        # A high stretch factor (vs. self.log's 1 below), not the default 0:
-        # root's box layout distributes any space beyond each widget's own
-        # minimum in proportion to stretch, so without this the log
-        # (already independently scrollable, see its own comment) claimed
-        # nearly all of the window's extra height and left this
-        # comparatively starved even when the window was made taller to
-        # compensate (confirmed directly). This makes the settings area
-        # claim space first, up to its own maximumHeight cap above, before
-        # the log gets much beyond its own minimum -- while both remain
-        # free to shrink all the way down on a genuinely small screen,
-        # since neither has a hard minimumHeight forcing it not to.
-        root.addWidget(settings_scroll, stretch=10)
+        # A modest stretch factor, not 0 and not disproportionately high: the
+        # final resize() call below already budgets an explicit amount of
+        # height for this (_SETTINGS_SCROLL_DESIRED_HEIGHT) and for self.log
+        # (log_reasonable_height) -- an earlier attempt at stretch=10 (vs.
+        # log's 1) "won" that budget so thoroughly that it claimed most of
+        # any leftover space up to its own maximumHeight cap above, leaving
+        # ~250px of empty canvas inside its own viewport while self.log (the
+        # most important thing to see during an actual live session) was
+        # squeezed down to about 3 visible lines -- confirmed directly by
+        # measuring both against a truly fresh install (no locally saved
+        # settings skewing the numbers). A small ratio in self.log's favor
+        # instead sends most of any surplus there, since it's the one that
+        # actually benefits from more visible height session over session
+        # (the settings area's own content doesn't grow past what it
+        # already needs just because the window got taller). Both remain
+        # free to shrink all the way down on a genuinely small screen either
+        # way, since neither has a hard minimumHeight forcing it not to.
+        root.addWidget(settings_scroll, stretch=3)
 
         self.pause_btn = QPushButton(tr("Pauza"))
         self.pause_btn.setToolTip(
@@ -1720,7 +1755,9 @@ class MainWindow(QMainWindow):
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        root.addWidget(self.log, stretch=1)
+        # stretch=2 vs. settings_scroll's 1 above -- see its comment for why
+        # the ratio favors this getting most of any surplus window height.
+        root.addWidget(self.log, stretch=2)
 
         # A fixed 600x500 (this call's value until now) badly undersized the
         # window once the settings area could scroll internally -- narrower
@@ -1749,7 +1786,7 @@ class MainWindow(QMainWindow):
             + overlay_row.sizeHint().height()
             + transcript_row.sizeHint().height()
         )
-        log_reasonable_height = 140
+        log_reasonable_height = 200
         target_width = self.sizeHint().width() + 20
         target_height = _SETTINGS_SCROLL_DESIRED_HEIGHT + chrome_height + log_reasonable_height + 80
         # Capped against the real screen's available space -- belt-and-
@@ -1920,7 +1957,8 @@ class MainWindow(QMainWindow):
 
     def _on_advanced_toggled(self, expanded: bool) -> None:
         self.advanced_panel.setVisible(expanded)
-        self.advanced_toggle_btn.setText(tr("▾ Zaawansowane") if expanded else tr("▸ Zaawansowane"))
+        arrow = "▾" if expanded else "▸"
+        self.advanced_toggle_btn.setText(f"{arrow} {tr('Zaawansowane')}")
 
     def _on_voice_mode_changed(self, _index: int) -> None:
         data = self.voice_combo.currentData()
@@ -2321,11 +2359,13 @@ class MainWindow(QMainWindow):
             _STATUS_DOT_COLORS.get(state, _STATUS_DOT_IDLE_COLOR),
             _STATUS_BANNER_BG_COLORS.get(state, _STATUS_BANNER_IDLE_BG),
         )
-        # Reconnecting is the one state that needs to visibly stand out (see
-        # _on_error()'s matching color for the announcement itself, in the
-        # main window only -- never on the overlay, which only ever shows
-        # transcripts) -- everything else uses the label's normal color.
-        self.status_label.setStyleSheet("color: #b02a2a; font-weight: bold;" if state == SessionState.RECONNECTING else "")
+        # No per-state text color/weight override here anymore -- an
+        # earlier version made RECONNECTING's text red-on-red (this state's
+        # own status_frame banner background is already a dark red tint),
+        # a real WCAG contrast failure (2.46:1, well under the 4.5:1
+        # minimum). The banner itself (background/border/dot, set above)
+        # already carries the color signal; the plain default text color
+        # reads clearly against every banner tint.
         if state == SessionState.RUNNING:
             if self._session_running_since is None:
                 self._session_running_since = time.monotonic()
@@ -2672,7 +2712,7 @@ class MainWindow(QMainWindow):
         # while reconnecting -- never on the overlay, which never receives
         # error messages at all (only on_transcript). Anything else (a real
         # error, a warning, ...) stays the log's normal color.
-        color = "#b02a2a" if self._current_session_state == SessionState.RECONNECTING else None
+        color = theme.DANGER if self._current_session_state == SessionState.RECONNECTING else None
         self._append_log_line(message, color)
         config.log_error(message)
 

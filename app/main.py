@@ -16,7 +16,7 @@ import certifi
 # step by hand.
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
 from .gui import MainWindow
@@ -34,6 +34,15 @@ def _icon_path() -> str:
 def main() -> None:
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(_icon_path()))
+    # A default font size for the app's own widgets, applied BEFORE the
+    # stylesheet -- deliberately not "font-size: 10pt" in theme.py's QSS: a
+    # QSS font-size on the universal "*" selector overrides every widget's
+    # own setFont() call with no way for that widget to opt out (confirmed:
+    # it silently forced OverlayWindow's caption_view -- meant to be large,
+    # readable subtitles for OBS to capture -- down from its real ~28-60pt
+    # size to 10pt). QApplication.setFont() only sets the inherited
+    # default; any widget's own explicit setFont() still wins normally.
+    app.setFont(QFont(app.font().family(), 10))
     app.setStyleSheet(THEME_QSS)
     window = MainWindow()
     window.show()
