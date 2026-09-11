@@ -618,7 +618,7 @@ class FileStream:
     (in milliseconds) are updated live for a GUI to show a scrubber.
     """
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, loop: asyncio.AbstractEventLoop | None = None):
         self._path = Path(path)
         self._paused = threading.Event()
         self._seek_to_ms: float | None = None
@@ -632,10 +632,9 @@ class FileStream:
         # file starts paused by design, see SessionWorker.start()/
         # TranslationRunner._do_set_file, but should still decode while
         # paused). A plain thread, not asyncio: this runs off the event loop
-        # entirely so it can't be starved by loop scheduling, and both
-        # FileStream() call sites already have a loop running by construction
-        # time anyway -- the point is decoupling decode from chunks() being
-        # pumped, not from asyncio itself.
+        # entirely so it can't be starved by loop scheduling -- the point is
+        # decoupling decode from chunks() being pumped, not from asyncio
+        # itself.
         #
         # Signaled via an asyncio.Event (set cross-thread with
         # call_soon_threadsafe), not a threading.Event awaited through
@@ -648,7 +647,20 @@ class FileStream:
         # abandoned, but stayed pinned regardless. An asyncio.Event's wait()
         # is a plain, cheaply-cancellable coroutine await instead.
         self._decode_done = asyncio.Event()
-        self._loop = asyncio.get_running_loop()
+        # loop= lets a caller that already holds the loop object (see
+        # SessionWorker.start(), a plain synchronous method) pass it in
+        # directly -- asyncio.get_running_loop() (the fallback here, for
+        # TranslationRunner._do_set_file's case, a real async method)
+        # requires a loop to be actively RUNNING at the call site, not just
+        # set as current-for-this-thread via asyncio.set_event_loop(). At
+        # session start, a file picked before Start is constructed from
+        # SessionWorker.start() AFTER set_event_loop() but BEFORE
+        # run_until_complete() -- the loop exists and is the right one, it
+        # just isn't running yet -- so get_running_loop() unconditionally
+        # raised "RuntimeError: no running event loop" there, confirmed
+        # reproducible and matching a real user report ("Błąd urządzenia
+        # audio: no running event loop" on Start with a file selected).
+        self._loop = loop if loop is not None else asyncio.get_running_loop()
         self._pcm: bytes | None = None
         self._decode_error: Exception | None = None
         threading.Thread(target=self._decode, daemon=True).start()

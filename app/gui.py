@@ -920,7 +920,12 @@ class SessionWorker(QObject):
             self._mic_source = mic
             file = None
             if self._file_path is not None:
-                file = FileStream(self._file_path)
+                # loop=self._loop explicitly: this runs before
+                # self._loop.run_until_complete() below, so it isn't
+                # RUNNING yet -- FileStream's own get_running_loop()
+                # fallback needs an active loop, not just one that's been
+                # set as current (see FileStream's constructor comment).
+                file = FileStream(self._file_path, loop=self._loop)
                 file.pause()  # never autoplay a file that's active at Start
             source_cm = MixedSource(mic, file, on_error=self.error_occurred.emit)
             self._mixed_source = source_cm
