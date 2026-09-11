@@ -289,6 +289,8 @@ _TRANSLATIONS: dict[str, str] = {
     "Wyłączony": "Off",
     "Wznów": "Resume",
     "Wznów plik": "Resume file",
+    "▸ Zaawansowane": "▸ Advanced",
+    "▾ Zaawansowane": "▾ Advanced",
     "Zamknij": "Close",
     "Zamknij okienko": "Close window",
     "Zamknij okienko z tłumaczeniem": "Close translation window",

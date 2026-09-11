@@ -130,6 +130,27 @@ QPushButton#primaryButton:disabled {{
     border-color: {BORDER_SUBTLE};
 }}
 
+/* -- The "Zaawansowane" disclosure toggle: quiet, not a call to action --
+   flat until hovered, muted label color, no border of its own. -- */
+QPushButton#advancedToggle {{
+    background-color: transparent;
+    color: {TEXT_SECONDARY};
+    border: none;
+    border-radius: 6px;
+    padding: 4px 8px;
+    text-align: left;
+}}
+
+QPushButton#advancedToggle:hover {{
+    background-color: {BG_RAISED};
+    color: {TEXT_PRIMARY};
+    border-color: transparent;
+}}
+
+QPushButton#advancedToggle:checked {{
+    color: {TEXT_PRIMARY};
+}}
+
 /* -- Inputs -- */
 QLineEdit, QPlainTextEdit, QListWidget, QComboBox {{
     background-color: {BG_RAISED};
@@ -223,9 +244,9 @@ QSlider::handle:horizontal:hover {{
    ::chunk color (a VU-meter convention -- green for mic, blue for output)
    wins over this; this only sets the resting track look. -- */
 QProgressBar {{
-    background-color: {BG_RAISED};
-    border: 1px solid {BORDER_SUBTLE};
-    border-radius: 4px;
+    background-color: {BG_RAISED_HOVER};
+    border: 1px solid {BORDER};
+    border-radius: 5px;
     text-align: center;
     color: transparent;
 }}
