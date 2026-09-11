@@ -1,7 +1,10 @@
 """Audio device enumeration plus microphone capture / playback streaming.
 
-PCM format throughout matches what the Palabra API expects: 16-bit signed
-little-endian, mono, 24 kHz (see palabra_ai.audio.OUTPUT_SAMPLE_RATE).
+PCM format throughout is 16-bit signed little-endian, mono, matching what
+the Palabra API expects -- but at two different rates (see RATE/INPUT_RATE
+below): audio sent TO the server (mic/file) is captured/resampled to
+INPUT_RATE, while audio received FROM the server (TTS output) is always
+RATE, the server's fixed output rate (palabra_ai.audio.OUTPUT_SAMPLE_RATE).
 """
 
 from __future__ import annotations
@@ -23,12 +26,23 @@ from palabra_ai import load_pcm
 
 from .i18n import tr
 
-RATE = 24000
+RATE = 24000  # output/playback rate -- fixed server-side (palabra_ai.audio.OUTPUT_SAMPLE_RATE)
+# Input (mic/file capture, sent to the server) rate. Lower than RATE:
+# measured via a real A/B test against the live API -- confirmed both on
+# synthetic speech and, since real mic input carries room noise/reverb/
+# sibilants a synthetic clip doesn't, on a real 2-minute recording (a
+# genuine sermon, not TTS) -- that 16kHz cuts ASR/confirmation latency with
+# the transcribed text staying byte-identical to 24kHz's, so there's no
+# accuracy cost to sending less data per chunk. 48kHz measured no better
+# than 24kHz either, so only lowering helps. Independent from RATE:
+# whatever we capture at gets resampled to this before being sent, exactly
+# like a device whose native rate doesn't match (see _needs_resampling).
+INPUT_RATE = 16000
 CHANNELS = 1
 CHUNK_MS = 320
-CHUNK_SAMPLES = int(RATE * CHUNK_MS / 1000)
+CHUNK_SAMPLES = int(INPUT_RATE * CHUNK_MS / 1000)
 CHUNK_BYTES = CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
-BYTES_PER_MS = RATE * CHANNELS * 2 / 1000
+BYTES_PER_MS = INPUT_RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
 MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
 MAX_OUTPUT_BACKLOG_SAMPLES = int(RATE * 1.2)  # ~1.2s -- see OutputSink.play()
@@ -197,21 +211,21 @@ def _wasapi_extra_settings() -> "sd.WasapiSettings | None":
     return None
 
 
-def _needs_resampling(device: int | None) -> int | None:
-    """Returns a device's native sample rate if it doesn't match RATE AND
-    this platform lacks WASAPI's auto_convert -- meaning PortAudio won't
+def _needs_resampling(device: int | None, target_rate: int) -> int | None:
+    """Returns a device's native sample rate if it doesn't match target_rate
+    AND this platform lacks WASAPI's auto_convert -- meaning PortAudio won't
     reliably convert for us and MicStream/OutputSink must resample
     themselves (see _LinearResampler). None otherwise: either WASAPI will
-    handle it, or the device's own rate already matches RATE, so the
-    caller should just open at RATE directly, today's untouched default.
+    handle it, or the device's own rate already matches target_rate, so the
+    caller should just open at target_rate directly, today's untouched default.
 
-    Used for BOTH capture and playback -- confirmed via chunks()'s own
-    long-standing comment that even WASAPI's auto_convert isn't perfectly
-    real-time-accurate, so a platform with NO conversion at all (macOS)
-    plausibly has the same class of problem on input as the one a real
-    user report confirmed on output (screechy/crackling playback);
-    nothing here assumes input is fine just because nobody happened to
-    report it.
+    Used for BOTH capture (target_rate=INPUT_RATE) and playback
+    (target_rate=RATE) -- confirmed via chunks()'s own long-standing comment
+    that even WASAPI's auto_convert isn't perfectly real-time-accurate, so a
+    platform with NO conversion at all (macOS) plausibly has the same class
+    of problem on input as the one a real user report confirmed on output
+    (screechy/crackling playback); nothing here assumes input is fine just
+    because nobody happened to report it.
     """
     if _wasapi_extra_settings() is not None:
         return None
@@ -219,7 +233,7 @@ def _needs_resampling(device: int | None) -> int | None:
         native_rate = int(round(sd.query_devices(device)["default_samplerate"]))
     except Exception:
         return None
-    if native_rate and native_rate != RATE:
+    if native_rate and native_rate != target_rate:
         return native_rate
     return None
 
@@ -359,11 +373,11 @@ class MicStream:
         # device would hand back pitch-shifted, crackling audio to
         # Palabra, just less obviously than a speaker (garbled speech
         # reads as "the ASR/translation is having a bad day", not as an
-        # audio bug). Resample capture to RATE ourselves in that case,
-        # same as OutputSink does for playback.
-        native_rate = _needs_resampling(device)
-        stream_rate = native_rate or RATE
-        resampler = _LinearResampler(native_rate, RATE) if native_rate else None
+        # audio bug). Resample capture to INPUT_RATE ourselves in that case,
+        # same as OutputSink does (to RATE) for playback.
+        native_rate = _needs_resampling(device, INPUT_RATE)
+        stream_rate = native_rate or INPUT_RATE
+        resampler = _LinearResampler(native_rate, INPUT_RATE) if native_rate else None
 
         def _open(rate: int, resampler_for_rate: "_LinearResampler | None") -> sd.RawInputStream:
             return _open_with_retry(lambda: sd.RawInputStream(
@@ -378,12 +392,12 @@ class MicStream:
         try:
             return _open(stream_rate, resampler)
         except Exception:
-            if stream_rate == RATE:
+            if stream_rate == INPUT_RATE:
                 raise
             # Same fallback reasoning as OutputSink: the device rejected
-            # its own reported native rate -- fall back to plain RATE
+            # its own reported native rate -- fall back to plain INPUT_RATE
             # rather than failing to open the mic at all.
-            return _open(RATE, None)
+            return _open(INPUT_RATE, None)
 
     def _make_callback(self, channel: int | None, resampler: "_LinearResampler | None") -> Callable[..., None]:
         # A fresh closure per open (not a single self._on_audio bound method
@@ -461,9 +475,9 @@ class MicStream:
         driven by that thread's own event loop, not offloaded to a
         different one (which would need its own COM initialization).
         """
-        native_rate = _needs_resampling(new_device)
-        stream_rate = native_rate or RATE
-        resampler = _LinearResampler(native_rate, RATE) if native_rate else None
+        native_rate = _needs_resampling(new_device, INPUT_RATE)
+        stream_rate = native_rate or INPUT_RATE
+        resampler = _LinearResampler(native_rate, INPUT_RATE) if native_rate else None
 
         async def _open(rate: int, resampler_for_rate: "_LinearResampler | None") -> sd.RawInputStream:
             new_stream = await _open_with_retry_async(lambda: sd.RawInputStream(
@@ -480,9 +494,9 @@ class MicStream:
         try:
             new_stream = await _open(stream_rate, resampler)
         except Exception:
-            if stream_rate == RATE:
+            if stream_rate == INPUT_RATE:
                 raise
-            new_stream = await _open(RATE, None)  # see _open_stream's matching fallback
+            new_stream = await _open(INPUT_RATE, None)  # see _open_stream's matching fallback
         old_stream = self._stream
         self._stream = new_stream
         self._channel = channel
@@ -641,7 +655,7 @@ class FileStream:
 
     def _decode(self) -> None:
         try:
-            pcm = load_pcm(self._path, sample_rate=RATE, channels=CHANNELS)
+            pcm = load_pcm(self._path, sample_rate=INPUT_RATE, channels=CHANNELS)
             self._pcm = pcm
             self.total_ms = len(pcm) / BYTES_PER_MS
         except Exception as e:  # decode failure (corrupt file, codec issue, ...) -- surfaced later by chunks()
@@ -1029,7 +1043,7 @@ class OutputSink:
         # cause of a real report (some Mac speakers/headphones sounding
         # "screechy"/"crackly"). Resample our fixed-rate PCM to the
         # device's own native rate ourselves in that case.
-        native_rate = _needs_resampling(device)
+        native_rate = _needs_resampling(device, RATE)
         output_rate = native_rate or RATE
         self._resampler = _LinearResampler(RATE, native_rate) if native_rate else None
         # Scaled from MAX_OUTPUT_BACKLOG_SAMPLES (defined at RATE) to

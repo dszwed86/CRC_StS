@@ -22,7 +22,7 @@ import websockets
 from palabra_ai import Audio, Palabra, Raw, ServerError, ServerWarning, Transcript, build_task
 from palabra_ai.exc import NotReadyError, PalabraError, SessionError
 
-from .audio_io import FileStream
+from .audio_io import INPUT_RATE, FileStream
 from .i18n import tr
 
 # Auto-reconnect (see TranslationRunner.run()): SessionError ("WebSocket
@@ -504,6 +504,13 @@ class TranslationRunner:
                     [self._target_lang],
                     voice_id=self._voice_id,
                     voice_cloning=self._voice_cloning,
+                    # Send captured/file audio at 16kHz instead of build_task's
+                    # own 24kHz default -- see audio_io.INPUT_RATE for the
+                    # real-API A/B test (including on real, noisy speech) this
+                    # is based on. MicStream/FileStream already do the actual
+                    # resampling to this rate; this just tells the server what
+                    # rate to expect.
+                    input_sample_rate=INPUT_RATE,
                     # Lower perceived latency: translate partial (still-forming)
                     # transcriptions instead of waiting for each segment to be
                     # fully confirmed, and confirm a segment after a shorter
