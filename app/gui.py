@@ -47,6 +47,7 @@ from palabra_ai.exc import AuthError, PalabraError
 from . import __version__, config, glossary, i18n, theme
 from .i18n import tr
 from .audio_io import (
+    MAX_GAIN_BOOST,
     FileStream,
     MicStream,
     MixedSource,
@@ -55,6 +56,7 @@ from .audio_io import (
     list_input_devices,
     list_output_devices,
     play_test_tone,
+    preload_file,
     probe_audio_file,
     rescan_devices,
 )
@@ -826,6 +828,7 @@ class SessionConfig:
     mic_channel: int | None = None
     mic_gain: float = 1.0
     mic_gate_threshold: float = 0.0
+    file_gain: float = 1.0
     voice_id: str | None = None
     voice_cloning: bool = False
     subtitles_only: bool = False
@@ -857,6 +860,7 @@ class SessionWorker(QObject):
         self._file_path = config.file_path
         self._initial_mic_gain = config.mic_gain
         self._initial_gate_threshold = config.mic_gate_threshold
+        self._initial_file_gain = config.file_gain
         self._voice_id = config.voice_id
         self._voice_cloning = config.voice_cloning
         self._subtitles_only = config.subtitles_only
@@ -928,6 +932,7 @@ class SessionWorker(QObject):
                 file = FileStream(self._file_path, loop=self._loop)
                 file.pause()  # never autoplay a file that's active at Start
             source_cm = MixedSource(mic, file, on_error=self.error_occurred.emit)
+            source_cm.set_file_gain(self._initial_file_gain)
             self._mixed_source = source_cm
             with source_cm as source, OutputSink(device=self._output_device) as sink:
                 self._sink = sink
@@ -1020,6 +1025,12 @@ class SessionWorker(QObject):
         # involved), so this can be called directly -- no loop marshaling needed.
         if self._mic_source is not None:
             self._mic_source.set_gain(gain)
+
+    def set_file_gain(self, gain: float) -> None:
+        # Same reasoning as set_mic_gain(): MixedSource.set_file_gain() is a
+        # plain thread-safe attribute write, no loop marshaling needed.
+        if self._mixed_source is not None:
+            self._mixed_source.set_file_gain(gain)
 
     def set_gate_threshold(self, threshold: float) -> None:
         if self._mic_source is not None:
@@ -1175,6 +1186,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr("CRC Translator"))
         self._thread: threading.Thread | None = None
         self._worker: SessionWorker | None = None
+        # A lightweight standalone MicStream, open only while no real session
+        # is running, purely so mic_level_bar has something live to show
+        # before Start is ever clicked -- see _start_mic_preview/
+        # _stop_mic_preview. Always closed before a real session's own
+        # MicStream opens the same device (see _on_start_stop), and reopened
+        # once that session ends (see _on_worker_finished).
+        self._preview_mic: MicStream | None = None
         self._selected_file: str | None = None
         self._overlay: OverlayWindow | None = None
         self._transcript_history: list[TranscriptEvent] = []
@@ -1256,8 +1274,14 @@ class MainWindow(QMainWindow):
         gain_row = QHBoxLayout()
         gain_row.addWidget(QLabel(tr("Głośność mikrofonu:")))
         self.mic_gain_slider = QSlider(Qt.Orientation.Horizontal)
-        self.mic_gain_slider.setRange(0, 100)
+        # Goes up to MAX_GAIN_BOOST (400%), not just 100%: below 100% it
+        # attenuates like before, above 100% it boosts a mic that's too quiet
+        # even at its own full level -- see MicStream.set_gain().
+        self.mic_gain_slider.setRange(0, int(MAX_GAIN_BOOST * 100))
         self.mic_gain_slider.setValue(100)
+        self.mic_gain_slider.setToolTip(
+            tr("Powyżej 100% wzmacnia sygnał z mikrofonu -- przydatne, gdy mikrofon jest zbyt cichy nawet na pełnej głośności.")
+        )
         self.mic_gain_slider.valueChanged.connect(self._on_mic_gain_changed)
         self.mic_gain_label = QLabel("100%")
         gain_row.addWidget(self.mic_gain_slider, stretch=1)
@@ -1284,6 +1308,11 @@ class MainWindow(QMainWindow):
         self.mic_level_bar.setStyleSheet("QProgressBar::chunk { background-color: #4caf50; }")
         level_row.addWidget(self.mic_level_bar, stretch=1)
         mic_gain_outer.addLayout(level_row)
+
+        self.mic_mute_warning = QLabel(tr("⚠ Mikrofon jest wyciszony"))
+        self.mic_mute_warning.setStyleSheet(f"color: {theme.WARNING}; font-weight: bold;")
+        self.mic_mute_warning.setVisible(False)
+        mic_gain_outer.addWidget(self.mic_mute_warning)
 
         # A separate widget (not folded into mic_gain_row above) so it can
         # live in the "Zaawansowane" section below instead of always-visible
@@ -1378,6 +1407,24 @@ class MainWindow(QMainWindow):
         self.position_slider.setVisible(False)
         self.position_label.setVisible(False)
 
+        self.file_gain_row = QWidget()
+        file_gain_layout = QHBoxLayout(self.file_gain_row)
+        file_gain_layout.setContentsMargins(0, 0, 0, 0)
+        file_gain_layout.addWidget(QLabel(tr("Głośność pliku:")))
+        self.file_gain_slider = QSlider(Qt.Orientation.Horizontal)
+        # Same range/semantics as mic_gain_slider -- see its comment.
+        self.file_gain_slider.setRange(0, int(MAX_GAIN_BOOST * 100))
+        self.file_gain_slider.setValue(100)
+        self.file_gain_slider.setToolTip(
+            tr("Powyżej 100% wzmacnia dźwięk z pliku -- przydatne, gdy nagranie jest zbyt ciche.")
+        )
+        self.file_gain_slider.valueChanged.connect(self._on_file_gain_changed)
+        self.file_gain_label = QLabel("100%")
+        file_gain_layout.addWidget(self.file_gain_slider, stretch=1)
+        file_gain_layout.addWidget(self.file_gain_label)
+        # Same visibility lifecycle as position_slider -- no file selected yet.
+        self.file_gain_row.setVisible(False)
+
         # mic and file are both always part of every session now -- there is
         # no mode selector, so both rows are always visible; no toggling code
         # needed at all (contrast with the old _on_mode_changed).
@@ -1391,6 +1438,7 @@ class MainWindow(QMainWindow):
         form.addRow("", self.mic_gain_row)
         form.addRow(tr("Plik (opcjonalnie):"), self.file_row)
         form.addRow("", self.file_playback_row)
+        form.addRow("", self.file_gain_row)
 
         output_group = QGroupBox(tr("Tłumaczenie"))
         form = QFormLayout(output_group)
@@ -1840,6 +1888,8 @@ class MainWindow(QMainWindow):
         ]
 
         self._apply_saved_app_settings(config.load_app_settings())
+        self._level_timer.start()
+        self._start_mic_preview()
 
         self._update_checker = UpdateChecker()
         self._update_checker.update_found.connect(self._on_update_found, Qt.ConnectionType.QueuedConnection)
@@ -1897,6 +1947,8 @@ class MainWindow(QMainWindow):
                 self.output_combo.setCurrentIndex(idx)
         if "mic_gain" in settings:
             self.mic_gain_slider.setValue(int(settings["mic_gain"]))
+        if "file_gain" in settings:
+            self.file_gain_slider.setValue(int(settings["file_gain"]))
         if "mic_muted" in settings:
             self.mic_mute_check.setChecked(bool(settings["mic_muted"]))
         if "mic_gate" in settings:
@@ -1934,6 +1986,22 @@ class MainWindow(QMainWindow):
             idx = self.log_filter_combo.findData(log_filter)
             if idx >= 0:
                 self.log_filter_combo.setCurrentIndex(idx)
+        # Overrides the sizeHint-based default computed earlier in __init__
+        # (see its own comment block) with whatever size the user last left
+        # the window at -- without this, resizing the window bigger to fix
+        # a cramped default was silently lost on every restart, since
+        # nothing persisted it and __init__ always recomputed the same
+        # formula-based size from scratch.
+        saved_width = settings.get("window_width")
+        saved_height = settings.get("window_height")
+        if saved_width and saved_height:
+            width, height = int(saved_width), int(saved_height)
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                width = min(width, available.width() - 40)
+                height = min(height, available.height() - 80)
+            self.resize(width, height)
 
     def _save_app_settings(self) -> None:
         voice_kind, voice_id = self.voice_combo.currentData() if self.voice_combo.count() else ("auto", None)
@@ -1942,6 +2010,7 @@ class MainWindow(QMainWindow):
             "mic_channel": self.mic_channel_combo.currentData() if self.mic_channel_combo.count() else None,
             "output_device_name": self.output_combo.currentText(),
             "mic_gain": self.mic_gain_slider.value(),
+            "file_gain": self.file_gain_slider.value(),
             "mic_muted": self.mic_mute_check.isChecked(),
             "mic_gate": self.mic_gate_slider.value(),
             "subtitles_only": self.subtitles_only_check.isChecked(),
@@ -1954,6 +2023,8 @@ class MainWindow(QMainWindow):
             "voice_custom_text": self.voice_custom_edit.text(),
             "log_filter": self.log_filter_combo.currentData(),
             "language": i18n.get_language(),
+            "window_width": self.width(),
+            "window_height": self.height(),
         })
 
     def _set_config_enabled(self, enabled: bool) -> None:
@@ -2088,14 +2159,42 @@ class MainWindow(QMainWindow):
 
     def _on_mic_channel_changed(self, _index: int) -> None:
         # Live device/channel switching mid-session (see
-        # SessionWorker.change_mic_device) -- a no-op before Start (no
-        # worker yet). The mic is always the active source now, so there's
-        # no mode check left to make.
+        # SessionWorker.change_mic_device). Before Start (no worker yet),
+        # restart the level-meter preview on the newly selected device/
+        # channel instead -- the mic is always the active source now, so
+        # there's no mode check left to make either way.
         if self._worker is None:
+            self._start_mic_preview()
             return
         device = self.mic_combo.currentData()
         if device is not None:
             self._worker.change_mic_device(device, self.mic_channel_combo.currentData())
+
+    def _start_mic_preview(self) -> None:
+        """(Re)opens a standalone MicStream on the currently selected device
+        purely for mic_level_bar to show live movement before Start is ever
+        clicked (see _preview_mic's own comment). Silently does nothing on
+        failure (e.g. no device selected, or it's busy elsewhere) -- this is
+        a nice-to-have preview, not something worth surfacing an error
+        dialog for; the level bar just stays flat until it can open."""
+        self._stop_mic_preview()
+        if self._worker is not None:
+            return  # a real session owns the device now -- see _on_start_stop
+        device = self.mic_combo.currentData()
+        if device is None and self.mic_combo.count() == 0:
+            return
+        try:
+            mic = MicStream(device=device, channel=self.mic_channel_combo.currentData())
+            mic.__enter__()
+        except Exception:
+            return
+        self._preview_mic = mic
+
+    def _stop_mic_preview(self) -> None:
+        if self._preview_mic is not None:
+            with contextlib.suppress(Exception):
+                self._preview_mic.__exit__(None, None, None)
+            self._preview_mic = None
 
     def _choose_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -2112,6 +2211,9 @@ class MainWindow(QMainWindow):
         except (ValueError, ImportError) as e:
             QMessageBox.warning(self, tr("Nieprawidłowy plik"), str(e))
             return
+        # Start decoding now, not only once Start/"Start pliku" is clicked --
+        # see preload_file()'s own docstring for why.
+        preload_file(path)
         self._selected_file = path
         self.file_label.setText(path)
         self.file_clear_btn.setEnabled(True)
@@ -2119,13 +2221,14 @@ class MainWindow(QMainWindow):
         self.position_label.setVisible(True)
         self._set_skip_buttons_visible(True)
         self.file_pause_btn.setVisible(True)
+        self.file_gain_row.setVisible(True)
         if self._worker is not None:
             # Live add/change mid-session: same "never autoplay" rule as a
             # file selected before Start -- see SessionWorker.set_file() /
             # TranslationRunner._do_set_file, which pauses it before it's
             # ever handed to MixedSource.
             self._file_paused = True
-            self.file_pause_btn.setText(tr("Wznów plik"))
+            self.file_pause_btn.setText(tr("Start pliku"))
             self.file_pause_btn.setEnabled(True)
             self.position_slider.setEnabled(False)
             self._set_skip_buttons_enabled(False)
@@ -2152,6 +2255,7 @@ class MainWindow(QMainWindow):
         self.file_pause_btn.setEnabled(False)
         self._file_paused = False
         self.file_pause_btn.setText(tr("Pauza pliku"))
+        self.file_gain_row.setVisible(False)
         if self._worker is not None:
             self._worker.set_file(None)
 
@@ -2160,6 +2264,12 @@ class MainWindow(QMainWindow):
         self._balance_usd = config.load_balance()  # may have been edited/synced just now
 
     def _on_refresh_devices(self) -> None:
+        # rescan_devices() is only safe while no PortAudio stream is open
+        # (see its own docstring) -- _preview_mic is exactly such a stream,
+        # opened whenever this runs with no session active (including from
+        # _auto_refresh_devices, every few seconds while idle), so it must
+        # be closed first and reopened afterwards.
+        self._stop_mic_preview()
         rescan_devices()
 
         current_mic = self.mic_combo.currentData()
@@ -2206,6 +2316,12 @@ class MainWindow(QMainWindow):
                     self.output_combo.setCurrentIndex(self._output_devices.index(cable))
             self.output_hint.setVisible(find_virtual_cable(self._output_devices) is None)
 
+        # Unconditionally, not just when the mic combo changed above: if the
+        # device list didn't change, nothing re-triggers _start_mic_preview()
+        # via the combo's own signals, and the preview would otherwise stay
+        # closed until the user touches the mic combo themselves.
+        self._start_mic_preview()
+
     def _auto_refresh_devices(self) -> None:
         """Periodic, silent version of _on_refresh_devices() -- picks up a
         mic/headset plugged in or unplugged while idle, without the user
@@ -2229,8 +2345,14 @@ class MainWindow(QMainWindow):
         if self._worker is not None and not self._mic_muted:
             self._worker.set_mic_gain(value / 100)
 
+    def _on_file_gain_changed(self, value: int) -> None:
+        self.file_gain_label.setText(f"{value}%")
+        if self._worker is not None:
+            self._worker.set_file_gain(value / 100)
+
     def _on_mic_mute_toggled(self, checked: bool) -> None:
         self._mic_muted = checked
+        self.mic_mute_warning.setVisible(checked)
         if self._worker is not None:
             self._worker.set_mic_gain(0.0 if checked else self.mic_gain_slider.value() / 100)
 
@@ -2298,6 +2420,9 @@ class MainWindow(QMainWindow):
         self._partial_line_active = False
         self._log_repeat_state = {True: (None, 0), False: (None, 0)}
         self._log_repeat_block = {True: None, False: None}
+        # Release the device before the real session's own MicStream opens it
+        # below -- see _preview_mic's comment.
+        self._stop_mic_preview()
         worker = SessionWorker(SessionConfig(
             api_key=creds.api_key,
             source_lang=source_lang,
@@ -2308,6 +2433,7 @@ class MainWindow(QMainWindow):
             file_path=file_path,
             mic_gain=0.0 if self._mic_muted else self.mic_gain_slider.value() / 100,
             mic_gate_threshold=self.mic_gate_slider.value() / 100,
+            file_gain=self.file_gain_slider.value() / 100,
             voice_id=voice_id,
             voice_cloning=voice_cloning,
             subtitles_only=self.subtitles_only_check.isChecked(),
@@ -2339,7 +2465,7 @@ class MainWindow(QMainWindow):
         self._level_timer.start()
         if self._selected_file is not None:
             self._file_paused = True
-            self.file_pause_btn.setText(tr("Wznów plik"))
+            self.file_pause_btn.setText(tr("Start pliku"))
             self.file_pause_btn.setEnabled(True)
             self._position_timer.start()
         else:
@@ -2426,9 +2552,14 @@ class MainWindow(QMainWindow):
         self.start_stop_btn.setEnabled(True)
         self._set_config_enabled(True)
         self._position_timer.stop()
-        self._level_timer.stop()
         self.mic_level_bar.setValue(0)
         self.output_level_bar.setValue(0)
+        # The real session's MicStream has released the device by now (its
+        # own __exit__ already ran before finished.emit()) -- resume the
+        # preview so the level bar keeps showing something live. _level_timer
+        # itself is NOT stopped anymore -- it runs continuously (see
+        # __init__) so this preview keeps updating between sessions too.
+        self._start_mic_preview()
         self._is_paused = False
         self.pause_btn.setText(tr("Pauza"))
         self.pause_btn.setEnabled(False)
@@ -2476,7 +2607,7 @@ class MainWindow(QMainWindow):
         self._file_paused = not self._file_paused
         if self._file_paused:
             self._worker.pause_file()
-            self.file_pause_btn.setText(tr("Wznów plik"))
+            self.file_pause_btn.setText(tr("Start pliku"))
         else:
             self._worker.resume_file()
             self.file_pause_btn.setText(tr("Pauza pliku"))
@@ -2536,13 +2667,18 @@ class MainWindow(QMainWindow):
         self.position_label.setText(f"{_fmt_ms(self._worker.position_ms)} / {_fmt_ms(total)}")
 
     def _update_level_meter(self) -> None:
-        if self._worker is None:
-            self._level_timer.stop()
+        # Runs continuously (see __init__), not just during a session -- so
+        # mic_level_bar has something live to show as soon as a device is
+        # selected, via _preview_mic, not only once Start is clicked.
+        if self._worker is not None:
+            self.mic_level_bar.setValue(int(self._worker.mic_level * 100))
+            self.output_level_bar.setValue(int(self._worker.output_level * 100))
+        elif self._preview_mic is not None:
+            self.mic_level_bar.setValue(int(self._preview_mic.level * 100))
+            self.output_level_bar.setValue(0)
+        else:
             self.mic_level_bar.setValue(0)
             self.output_level_bar.setValue(0)
-            return
-        self.mic_level_bar.setValue(int(self._worker.mic_level * 100))
-        self.output_level_bar.setValue(int(self._worker.output_level * 100))
 
     def _update_session_display(self) -> None:
         if self._worker is None:
@@ -2843,6 +2979,7 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
         self._save_app_settings()
+        self._stop_mic_preview()
         if self._overlay is not None:
             self._overlay.close()
         super().closeEvent(event)

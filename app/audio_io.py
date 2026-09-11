@@ -39,6 +39,11 @@ RATE = 24000  # output/playback rate -- fixed server-side (palabra_ai.audio.OUTP
 # like a device whose native rate doesn't match (see _needs_resampling).
 INPUT_RATE = 16000
 CHANNELS = 1
+# Ceiling for the mic/file gain sliders' boost range (1.0 = original level,
+# above that amplifies a source that's too quiet even at 100%). 4.0 = +12dB --
+# enough headroom for a genuinely quiet recording without inviting a user to
+# push a merely-normal source into constant clipping.
+MAX_GAIN_BOOST = 4.0
 CHUNK_MS = 320
 CHUNK_SAMPLES = int(INPUT_RATE * CHUNK_MS / 1000)
 CHUNK_BYTES = CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
@@ -161,6 +166,42 @@ def probe_audio_file(path: str | Path) -> None:
         # whatever's wrong with this file into one readable message"),
         # matching the existing broad except in SessionWorker.start().
         raise ValueError(f"{path.name}: {tr('nie można otworzyć pliku')} ({e}).") from e
+
+
+# Populated by preload_file(), consumed (and popped -- single use, see
+# FileStream._decode()) once a real FileStream is constructed for the same
+# path. Lets a file picked before a session/event loop exists (see
+# SessionWorker.start()'s own comment on why FileStream can only be built
+# once a loop is running) start decoding right away instead of only once
+# Start is actually clicked -- the wait a user felt clicking "Start pliku"
+# was this decode only beginning at that exact moment, for a file that
+# could've been decoding for however long it sat selected first.
+_preload_events: dict[str, threading.Event] = {}
+_preload_results: dict[str, bytes | None] = {}
+_preload_lock = threading.Lock()
+
+
+def preload_file(path: str | Path) -> None:
+    """Starts decoding path in the background ahead of time (e.g. right after
+    it's picked in the file dialog). Safe to call repeatedly for the same
+    path -- a call while an earlier one is still decoding is a no-op."""
+    key = str(Path(path))
+    with _preload_lock:
+        if key in _preload_events:
+            return
+        event = threading.Event()
+        _preload_events[key] = event
+
+    def _work() -> None:
+        try:
+            pcm = load_pcm(path, sample_rate=INPUT_RATE, channels=CHANNELS)
+        except Exception:
+            pcm = None  # decode failed -- FileStream._decode() retries synchronously and reports the real error
+        with _preload_lock:
+            _preload_results[key] = pcm
+        event.set()
+
+    threading.Thread(target=_work, daemon=True).start()
 
 
 @dataclass
@@ -510,8 +551,10 @@ class MicStream:
         self._paused.clear()
 
     def set_gain(self, gain: float) -> None:
-        """0.0 (silent) .. 1.0 (full volume). Thread-safe; applied to the next chunks."""
-        self._gain = max(0.0, min(1.0, gain))
+        """0.0 (silent) .. 1.0 (original level) .. MAX_GAIN_BOOST (boosted, for
+        a source that's simply too quiet at 100%). Thread-safe; applied to the
+        next chunks."""
+        self._gain = max(0.0, min(MAX_GAIN_BOOST, gain))
 
     def set_gate_threshold(self, threshold: float) -> None:
         """0.0 (off -- every chunk passes through) .. 1.0 (only near-full-scale
@@ -601,12 +644,16 @@ class MicStream:
             if peak < self._gate_threshold * 32767:
                 return bytes(len(chunk))  # below the sensitivity threshold -- treat as silence
         gain = self._gain
-        if gain >= 1.0:
+        if gain == 1.0:
             return chunk
         if gain <= 0.0:
             return bytes(len(chunk))
+        # clip (not wrap) on overflow -- gain > 1.0 boosts a source that's too
+        # quiet even at its own original level, so pushing past int16 range is
+        # expected on loud peaks; wrapping around would be far more audible
+        # (harsh digital noise) than clipping.
         arr = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) * gain
-        return arr.astype(np.int16).tobytes()
+        return np.clip(arr, -32768, 32767).astype(np.int16).tobytes()
 
 
 class FileStream:
@@ -663,11 +710,39 @@ class FileStream:
         self._loop = loop if loop is not None else asyncio.get_running_loop()
         self._pcm: bytes | None = None
         self._decode_error: Exception | None = None
+        self._gain = 1.0
         threading.Thread(target=self._decode, daemon=True).start()
+
+    def set_gain(self, gain: float) -> None:
+        """0.0 (silent) .. 1.0 (original level) .. MAX_GAIN_BOOST (boosted, for
+        a source file that's too quiet even at 100%). Thread-safe; applied to
+        the next chunks -- see MicStream.set_gain(), same semantics."""
+        self._gain = max(0.0, min(MAX_GAIN_BOOST, gain))
+
+    def _apply_gain(self, chunk: bytes) -> bytes:
+        gain = self._gain
+        if gain == 1.0:
+            return chunk
+        if gain <= 0.0:
+            return bytes(len(chunk))
+        arr = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) * gain
+        return np.clip(arr, -32768, 32767).astype(np.int16).tobytes()
 
     def _decode(self) -> None:
         try:
-            pcm = load_pcm(self._path, sample_rate=INPUT_RATE, channels=CHANNELS)
+            key = str(self._path)
+            with _preload_lock:
+                event = _preload_events.pop(key, None)
+            if event is not None:
+                # preload_file() already started (or finished) decoding this
+                # exact path -- wait for that instead of decoding it twice.
+                event.wait()
+                with _preload_lock:
+                    pcm = _preload_results.pop(key, None)
+                if pcm is None:  # the preload failed -- decode here for real, so a genuine error still surfaces
+                    pcm = load_pcm(self._path, sample_rate=INPUT_RATE, channels=CHANNELS)
+            else:
+                pcm = load_pcm(self._path, sample_rate=INPUT_RATE, channels=CHANNELS)
             self._pcm = pcm
             self.total_ms = len(pcm) / BYTES_PER_MS
         except Exception as e:  # decode failure (corrupt file, codec issue, ...) -- surfaced later by chunks()
@@ -731,7 +806,7 @@ class FileStream:
             chunk = pcm[pos : pos + CHUNK_BYTES]
             pos += len(chunk)
             self.position_ms = min(pos / BYTES_PER_MS, self.total_ms)
-            yield chunk
+            yield self._apply_gain(chunk)
             await pacer.tick()
         self.position_ms = self.total_ms
 
@@ -780,6 +855,14 @@ class MixedSource:
         self._mic = mic
         self._file = file
         self._on_error = on_error
+        # Lives here, not on any one FileStream: a file gain the user set is a
+        # standing preference for "this mixer's file input", meant to survive
+        # swapping in a different file mid-session (see set_file() below,
+        # which re-applies it to whatever FileStream it's handed) -- a fresh
+        # FileStream on its own always starts back at its own default of 1.0.
+        self._file_gain = 1.0
+        if file is not None:
+            file.set_gain(self._file_gain)
         # Small bound: both sub-sources already self-pace to ~1 chunk per
         # CHUNK_MS, so these stay near-empty in steady state -- this is just
         # a safety cap against unbounded growth if either stalls, not a
@@ -821,6 +904,14 @@ class MixedSource:
     def pause_file(self) -> None:
         if self._file is not None:
             self._file.pause()
+
+    def set_file_gain(self, gain: float) -> None:
+        """Thread-safe, like MicStream.set_gain() -- stored here (not just
+        forwarded to the current FileStream) so it survives a later
+        set_file() swap; see __init__."""
+        self._file_gain = max(0.0, min(MAX_GAIN_BOOST, gain))
+        if self._file is not None:
+            self._file.set_gain(self._file_gain)
 
     def resume_file(self) -> None:
         if self._file is not None:
@@ -989,6 +1080,7 @@ class MixedSource:
                 self._file.__exit__(None, None, None)
             self._file = file
             if file is not None:
+                file.set_gain(self._file_gain)
                 file.__enter__()
                 self._file_task = asyncio.create_task(self._pump(self._file, self._file_q, is_file=True))
 

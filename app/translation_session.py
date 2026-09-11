@@ -557,7 +557,14 @@ class TranslationRunner:
                     # the full translated_transcription anyway) -- it's purely
                     # what makes partial subtitle text show up early.
                     translate_partials=True,
-                    silence_threshold=0.3,
+                    # Raised from the earlier 0.3 back up towards a middle
+                    # ground with the original 0.5 (see the A/B test measured
+                    # in the comment above this) -- real usage (a speaker who
+                    # pauses mid-sentence for emphasis, e.g. preaching) showed
+                    # 0.3 split segments more eagerly than wanted; 0.4 keeps
+                    # most of 0.3's latency win while giving pauses a bit more
+                    # room before the server calls a segment done.
+                    silence_threshold=0.4,
                 )
                 # Widen the server's internal TTS output queue beyond
                 # build_task()'s implicit (tight) default -- not exposed as

@@ -70,6 +70,7 @@ _APP_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {
     "mic_channel": (int, type(None)),
     "output_device_name": str,
     "mic_gain": (int, float),
+    "file_gain": (int, float),
     "mic_muted": bool,
     "mic_gate": (int, float),
     "subtitles_only": bool,
@@ -80,6 +81,8 @@ _APP_SETTINGS_TYPES: dict[str, type | tuple[type, ...]] = {
     "voice_custom_text": str,
     "log_filter": str,
     "language": str,
+    "window_width": (int, float),
+    "window_height": (int, float),
 }
 
 
