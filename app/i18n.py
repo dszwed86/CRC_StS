@@ -40,6 +40,16 @@ _TRANSLATIONS: dict[str, str] = {
     "Czcionka:": "Font:",
     "Dodaj": "Add",
     "Domyślny (auto)": "Default (auto)",
+    "Dostraja tłumaczenie pod rejestr kazań/treści religijnych (Palabra: style="
+    "church_catholic) -- np. poprawnie oddaje idiomy biblijne i liczebniki, zamiast"
+    " dosłownego tłumaczenia słowo w słowo. Zmierzone: bez dodatkowego opóźnienia."
+    " Zmienia znaczną część zdań stylistycznie, więc wyłącz dla świeckich sesji.": (
+        "Tunes the translation toward a sermon/religious register (Palabra: style="
+        "church_catholic) -- e.g. correctly renders biblical idioms and numerals"
+        " instead of a literal word-for-word translation. Measured: no added"
+        " latency. Rewords a significant share of sentences stylistically, so"
+        " turn it off for secular sessions."
+    ),
     "Dostępna nowa wersja": "New version available",
     "Dźwięk cichszy niż ten poziom jest całkowicie pomijany (zamieniany na ciszę) "
     "zanim trafi do tłumaczenia — Twoja mowa musi być głośniejsza niż ustawiony próg, "
@@ -196,6 +206,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Sprawdzenie": "Checking",
     "Start": "Start",
     "Stop": "Stop",
+    "Styl kościelny": "Church style",
     "System nie zgłasza żadnego urządzenia audio wyjściowego.": "The system reports no audio output device.",
     "Szacunkowe saldo w USD. Palabra nie udostępnia prawdziwego salda przez API, więc "
     "to tylko przybliżenie liczone przez aplikację (odejmuje szacowany koszt każdej "

@@ -120,6 +120,7 @@ class TranslationRunner:
         voice_id: str | None = None,
         voice_cloning: bool = False,
         mute_output: bool = False,
+        church_style: bool = False,
     ):
         self._palabra = Palabra(api_key=api_key, region=region)
         self._source_lang = source_lang
@@ -128,6 +129,16 @@ class TranslationRunner:
         self._sink = sink
         self._voice_id = voice_id
         self._voice_cloning = voice_cloning
+        # Nudges Palabra's MT output toward a sermon/religious register
+        # (server-side style="church_catholic") -- measured via a real A/B
+        # test against the live API: no added latency, and it fixes concrete
+        # translation errors a plain/no-style translation made on real
+        # sermon audio (wrong numbers, non-idiomatic biblical phrasing).
+        # Rewords a large share of sentences stylistically though, so it's a
+        # static per-session choice (like voice_id/source_lang), not
+        # live-switchable -- switching it mid-session via set_task was never
+        # tested.
+        self._church_style = church_style
         # Palabra has no server-side option to skip speech generation (it
         # only lets you configure HOW the voice sounds, not whether it's
         # produced at all -- confirmed against the docs), so translated
@@ -499,9 +510,15 @@ class TranslationRunner:
             drop_message = ""
             connected_at: float | None = None
             try:
+                # A mapping (not a plain [target_lang] list) merges "style"
+                # into this target's own translations[] entry -- build_task()
+                # only supports per-target overrides that way (see its
+                # docstring/source); a bare list has no per-target dict for
+                # this to land in.
+                targets = {self._target_lang: {"style": "church_catholic"}} if self._church_style else [self._target_lang]
                 task = build_task(
                     self._source_lang,
-                    [self._target_lang],
+                    targets,
                     voice_id=self._voice_id,
                     voice_cloning=self._voice_cloning,
                     # Send captured/file audio at 16kHz instead of build_task's

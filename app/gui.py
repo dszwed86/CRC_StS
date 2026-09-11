@@ -827,6 +827,7 @@ class SessionConfig:
     voice_id: str | None = None
     voice_cloning: bool = False
     subtitles_only: bool = False
+    church_style: bool = False
 
 
 class SessionWorker(QObject):
@@ -857,6 +858,7 @@ class SessionWorker(QObject):
         self._voice_id = config.voice_id
         self._voice_cloning = config.voice_cloning
         self._subtitles_only = config.subtitles_only
+        self._church_style = config.church_style
         self._loop: asyncio.AbstractEventLoop | None = None
         self._runner: TranslationRunner | None = None
         self._mic_source: MicStream | None = None
@@ -936,6 +938,7 @@ class SessionWorker(QObject):
                     voice_id=self._voice_id,
                     voice_cloning=self._voice_cloning,
                     mute_output=self._subtitles_only,
+                    church_style=self._church_style,
                 )
                 self._loop.run_until_complete(self._runner.run())
         except Exception as e:  # device open failure etc. — before/outside TranslationRunner's own handling
@@ -1397,6 +1400,18 @@ class MainWindow(QMainWindow):
         self.manage_glossary_btn.clicked.connect(self._on_manage_glossary)
         form.addRow("", self.manage_glossary_btn)
 
+        self.church_style_check = QCheckBox(tr("Styl kościelny"))
+        self.church_style_check.setChecked(True)
+        self.church_style_check.setToolTip(
+            tr(
+                "Dostraja tłumaczenie pod rejestr kazań/treści religijnych (Palabra: style="
+                "church_catholic) -- np. poprawnie oddaje idiomy biblijne i liczebniki, zamiast"
+                " dosłownego tłumaczenia słowo w słowo. Zmierzone: bez dodatkowego opóźnienia."
+                " Zmienia znaczną część zdań stylistycznie, więc wyłącz dla świeckich sesji."
+            )
+        )
+        form.addRow("", self.church_style_check)
+
         self.voice_combo = QComboBox()
         self.voice_combo.currentIndexChanged.connect(self._on_voice_mode_changed)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_selection_changed)
@@ -1567,6 +1582,7 @@ class MainWindow(QMainWindow):
             self.manage_voices_btn,
             self.refresh_devices_btn,
             self.manage_glossary_btn,
+            self.church_style_check,
         ]
 
         self._apply_saved_app_settings(config.load_app_settings())
@@ -1633,6 +1649,8 @@ class MainWindow(QMainWindow):
             self.mic_gate_slider.setValue(int(settings["mic_gate"]))
         if "subtitles_only" in settings:
             self.subtitles_only_check.setChecked(bool(settings["subtitles_only"]))
+        if "church_style" in settings:
+            self.church_style_check.setChecked(bool(settings["church_style"]))
         source_lang = settings.get("source_lang")
         if source_lang:
             idx = self.source_lang_combo.findData(source_lang)
@@ -1671,6 +1689,7 @@ class MainWindow(QMainWindow):
             "mic_muted": self.mic_mute_check.isChecked(),
             "mic_gate": self.mic_gate_slider.value(),
             "subtitles_only": self.subtitles_only_check.isChecked(),
+            "church_style": self.church_style_check.isChecked(),
             "source_lang": self.source_lang_combo.currentData(),
             "target_lang": self.target_lang_combo.currentData(),
             "voice_kind": voice_kind,
@@ -2030,6 +2049,7 @@ class MainWindow(QMainWindow):
             voice_id=voice_id,
             voice_cloning=voice_cloning,
             subtitles_only=self.subtitles_only_check.isChecked(),
+            church_style=self.church_style_check.isChecked(),
         ))
         # A plain threading.Thread, not QThread: on Windows, running PortAudio
         # (WASAPI) device I/O on a QThread intermittently crashed the whole
