@@ -1,4 +1,4 @@
-palabra-ai==2.0.2
+palabra-ai==2.1.1
 sounddevice
 numpy
 PySide6

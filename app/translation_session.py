@@ -361,7 +361,17 @@ class TranslationRunner:
                 # unwind here, unlike _do_pause/_do_resume).
                 return
             try:
-                await self._session.flush()
+                # palabra_ai renamed this SDK method flush() -> interrupt()
+                # between 2.0.2 and 2.1.1, and the OLD name's underlying
+                # wire message ("flush_task") is no longer accepted by the
+                # live server at all -- confirmed via a real seek/scrub
+                # call: every attempt failed with "Błąd serwera:
+                # VALIDATION_ERROR -- Message should contain non-empty
+                # message_type field" (a real user report), because
+                # "flush_task" isn't in the server's own list of valid
+                # message types anymore. Bumped the pinned SDK version
+                # (requirements.txt) alongside this rename.
+                await self._session.interrupt()
             except PalabraError as e:
                 self._on_error(f"{tr('Błąd')}: {e}")
             except Exception as e:
