@@ -1038,6 +1038,20 @@ _STATE_LABELS = {
     SessionState.ERROR: "Błąd",
 }
 
+# Status-dot color per state (see MainWindow.control_row's status_dot) --
+# amber for "working on it" (matches theme.ACCENT, the app's one accent
+# color), the same red the RECONNECTING text already uses for trouble,
+# and the same green as the mic level meter for "actually on air".
+_STATUS_DOT_IDLE_COLOR = "#5B6068"
+_STATUS_DOT_COLORS = {
+    SessionState.CONNECTING: "#D9A544",
+    SessionState.RECONNECTING: "#b02a2a",
+    SessionState.RUNNING: "#4caf50",
+    SessionState.PAUSED: "#D9A544",
+    SessionState.STOPPED: _STATUS_DOT_IDLE_COLOR,
+    SessionState.ERROR: "#b02a2a",
+}
+
 # Palabra S2S pricing (see README) -- used only for a rough, client-side
 # running estimate next to the session timer. Palabra doesn't expose actual
 # balance/usage via API (see the Settings dialog's "Otwórz panel Palabra"),
@@ -1525,10 +1539,19 @@ class MainWindow(QMainWindow):
         self._balance_usd: float | None = config.load_balance()
 
         control_row = QHBoxLayout()
+        # A small filled circle ahead of the status text -- a studio
+        # tally light, echoing the amber accent color's own real-world
+        # meaning (see app/theme.py). _on_state() below recolors it per
+        # SessionState; _STATUS_DOT_COLORS is its color table.
+        self.status_dot = QLabel()
+        self.status_dot.setFixedSize(10, 10)
+        self._set_status_dot_color(_STATUS_DOT_IDLE_COLOR)
         self.status_label = QLabel(tr("Gotowy"))
         self.session_time_label = QLabel("")
         self.start_stop_btn = QPushButton(tr("Start"))
+        self.start_stop_btn.setObjectName("primaryButton")
         self.start_stop_btn.clicked.connect(self._on_start_stop)
+        control_row.addWidget(self.status_dot)
         control_row.addWidget(self.status_label, stretch=1)
         control_row.addWidget(self.session_time_label)
         control_row.addWidget(self.pause_btn)
@@ -2128,10 +2151,14 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.set_subtitles_only(checked)
 
+    def _set_status_dot_color(self, color: str) -> None:
+        self.status_dot.setStyleSheet(f"background-color: {color}; border-radius: 5px;")
+
     def _on_state(self, state: SessionState) -> None:
         self._pause_request_pending = False
         self._current_session_state = state
         self.status_label.setText(tr(_STATE_LABELS.get(state, str(state))))
+        self._set_status_dot_color(_STATUS_DOT_COLORS.get(state, _STATUS_DOT_IDLE_COLOR))
         # Reconnecting is the one state that needs to visibly stand out (see
         # _on_error()'s matching color for the announcement itself, in the
         # main window only -- never on the overlay, which only ever shows

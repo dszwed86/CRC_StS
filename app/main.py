@@ -20,6 +20,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .gui import MainWindow
+from .theme import QSS as THEME_QSS
 
 
 def _icon_path() -> str:
@@ -33,6 +34,7 @@ def _icon_path() -> str:
 def main() -> None:
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(_icon_path()))
+    app.setStyleSheet(THEME_QSS)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
