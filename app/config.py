@@ -378,6 +378,70 @@ DEFAULT_BANNED_WORDS_PL: list[tuple[str, str]] = [
 ]
 
 
+# Real entries built up during real usage/testing of the church-sermon use
+# case (Palabra mis-hearing/mis-translating "Homecell(s)" -- a small-group
+# term -- and the name "Thabo") -- shipped as defaults for the same reason
+# as DEFAULT_BANNED_WORDS_PL: a fresh install starts with a sensible base
+# instead of an empty list, and is free to edit/extend the .txt file
+# afterward with zero risk of this default overwriting those edits later.
+DEFAULT_GLOSSARY_EN_PL: list[tuple[str, str]] = [
+    ("Thorbu", "Thabo"),
+    ("Tarbo", "Thabo"),
+    ("Homecells", "grupy domowe"),
+    ("homecells", "grupy domowe"),
+    ("Home Cells", "grupy domowe"),
+    ("home cells", "grupy domowe"),
+    ("Home-Cells", "grupy domowe"),
+    ("home-cells", "grupy domowe"),
+    ("Homesells", "grupy domowe"),
+    ("homesells", "grupy domowe"),
+    ("Home Sells", "grupy domowe"),
+    ("home sells", "grupy domowe"),
+    ("Homecell", "grupa domowa"),
+    ("homecell", "grupa domowa"),
+    ("Home Cell", "grupa domowa"),
+    ("home cell", "grupa domowa"),
+    ("Home-Cell", "grupa domowa"),
+    ("home-cell", "grupa domowa"),
+    ("Homesell", "grupa domowa"),
+    ("homesell", "grupa domowa"),
+    ("Home Sell", "grupa domowa"),
+    ("home sell", "grupa domowa"),
+]
+
+DEFAULT_GLOSSARY_PL_EN: list[tuple[str, str]] = [
+    ("Homecell", "Homecell"),
+    ("Homecells", "Homecelle"),
+]
+
+# Same-language (see sync_glossary_kind_blocking's kind="asr_fix") --
+# corrects the same "Homecell(s)" mis-hearing at the transcription stage
+# (before translation ever sees it) plus two real observed mis-hearings of
+# the name "Thabo".
+DEFAULT_ASR_FIX_EN: list[tuple[str, str]] = [
+    ("Thorbu", "Thabo"),
+    ("Tarbo", "Thabo"),
+    ("Home Sell", "Home Cell"),
+    ("Homesell", "Home Cell"),
+    ("home sell", "Home Cell"),
+    ("Home Seller", "Home Cell"),
+    ("Homeseller", "Home Cell"),
+    ("home seller", "Home Cell"),
+    ("Home Sale", "Home Cell"),
+    ("Homesale", "Home Cell"),
+    ("home sale", "Home Cell"),
+    ("Home Sells", "Home Cells"),
+    ("Homesells", "Home Cells"),
+    ("home sells", "Home Cells"),
+    ("Home Sellers", "Home Cells"),
+    ("Homesellers", "Home Cells"),
+    ("home sellers", "Home Cells"),
+    ("Home Sales", "Home Cells"),
+    ("Homesales", "Home Cells"),
+    ("home sales", "Home Cells"),
+]
+
+
 def load_glossary_entries(
     source_lang: str, target_lang: str, kind: str = "custom"
 ) -> tuple[list[tuple[str, str]], str | None, list[tuple[str, str]]]:
@@ -387,8 +451,11 @@ def load_glossary_entries(
     GLOSSARY_PATH) for one language pair/kind -- the caller (GlossaryDialog)
     compares the pairs against synced_pairs to know whether it's showing
     unsaved changes, instead of always assuming "just saved" on open.
-    Returns ([], None, []) if nothing saved yet (except kind="banned" with a
-    Polish source -- see DEFAULT_BANNED_WORDS_PL above).
+    Returns ([], None, []) if nothing saved yet (except a few specific
+    (kind, source_lang, target_lang) combinations seeded with real,
+    previously-built-up defaults -- see DEFAULT_BANNED_WORDS_PL,
+    DEFAULT_GLOSSARY_EN_PL, DEFAULT_GLOSSARY_PL_EN, DEFAULT_ASR_FIX_EN
+    above).
 
     One-time migration: an existing install's "custom" pairs were
     previously stored inline in GLOSSARY_PATH's JSON instead of a .txt file
@@ -415,8 +482,15 @@ def load_glossary_entries(
                     legacy_pairs = _parse_pairs(entry.get("pairs"))
                     if legacy_pairs:
                         _write_glossary_txt(txt_path, legacy_pairs)
-    if kind == "banned" and source_lang == "pl" and not txt_path.exists():
-        _write_glossary_txt(txt_path, DEFAULT_BANNED_WORDS_PL)
+    if not txt_path.exists():
+        if kind == "banned" and source_lang == "pl":
+            _write_glossary_txt(txt_path, DEFAULT_BANNED_WORDS_PL)
+        elif kind == "custom" and (source_lang, target_lang) == ("en", "pl"):
+            _write_glossary_txt(txt_path, DEFAULT_GLOSSARY_EN_PL)
+        elif kind == "custom" and (source_lang, target_lang) == ("pl", "en"):
+            _write_glossary_txt(txt_path, DEFAULT_GLOSSARY_PL_EN)
+        elif kind == "asr_fix" and source_lang == target_lang == "en":
+            _write_glossary_txt(txt_path, DEFAULT_ASR_FIX_EN)
     pairs = _read_glossary_txt(txt_path)
     return pairs, glossary_id, synced_pairs
 
