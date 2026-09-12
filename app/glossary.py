@@ -10,6 +10,23 @@ to /upload with the CSV -- there is no PATCH/PUT anywhere, so "editing"
 an existing glossary always means delete the old one (if any) + create a
 fresh one + upload its CSV once. A second upload to the same glossary_id
 is rejected outright ("Glossary file was already uploaded").
+
+glossary_type: "translation" (source_lang -> target_lang term mapping,
+what this app's own Glosariusz/Filtr przekleństw use) is the default.
+"asr" is a same-language (source_lang == target_lang -- confirmed: the
+API 422s otherwise) correction list -- both CSV columns are in the
+SAME language, "wrongly-recognized form, correct form" -- used to fix a
+name/term the speech recognizer keeps mishearing (e.g. an unusual
+foreign name), independent of and applied BEFORE the "translation" type
+gets a chance to force a specific target-language rendering. Verified
+via a real test: ASR transcribed an uncommon name as complete gibberish
+on its own; an "asr" glossary mapping that exact gibberish to the
+correct name fixed the transcript on the same audio. A third type,
+"asr_hot", also exists (same same-language CSV shape per Palabra's own
+docs) but wasn't tested here -- likely a proactive recognition-bias
+list (bias towards hearing a term correctly in the first place) as
+opposed to "asr"'s after-the-fact correction, but that distinction is
+unconfirmed.
 """
 
 from __future__ import annotations
@@ -163,6 +180,7 @@ def sync_glossary(
     target_lang: str,
     pairs: list[tuple[str, str]],
     old_glossary_id: str | None,
+    glossary_type: str = "translation",
 ) -> str | None:
     """Replaces whatever glossary currently represents this (name,
     source_lang, target_lang) with one holding exactly `pairs` -- the only
@@ -188,7 +206,7 @@ def sync_glossary(
         if old_glossary_id:
             delete_glossary(api_key, old_glossary_id)
         return None
-    glossary_id = create_glossary(api_key, name, source_lang, target_lang)
+    glossary_id = create_glossary(api_key, name, source_lang, target_lang, glossary_type=glossary_type)
     try:
         upload_entries(api_key, glossary_id, pairs)
     except GlossaryError as upload_error:

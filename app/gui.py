@@ -119,7 +119,8 @@ class GlossarySaver(QObject):
     finished = Signal(bool, str, object)  # ok, message, new_glossary_id (or None)
 
     def __init__(self, api_key: str, name: str, source_lang: str, target_lang: str,
-                 pairs: list[tuple[str, str]], old_glossary_id: str | None):
+                 pairs: list[tuple[str, str]], old_glossary_id: str | None,
+                 glossary_type: str = "translation"):
         super().__init__()
         self._api_key = api_key
         self._name = name
@@ -127,12 +128,13 @@ class GlossarySaver(QObject):
         self._target_lang = target_lang
         self._pairs = pairs
         self._old_glossary_id = old_glossary_id
+        self._glossary_type = glossary_type
 
     def run(self) -> None:
         try:
             new_id = glossary.sync_glossary(
                 self._api_key, self._name, self._source_lang, self._target_lang,
-                self._pairs, self._old_glossary_id,
+                self._pairs, self._old_glossary_id, glossary_type=self._glossary_type,
             )
         except glossary.GlossaryError as e:
             self.finished.emit(False, f"{tr('Błąd')}: {e}", None)
@@ -520,14 +522,23 @@ def sync_glossary_kind_blocking(api_key: str, source_lang: str, target_lang: str
     pairs, glossary_id, synced_pairs = config.load_glossary_entries(source_lang, target_lang, kind=kind)
     if pairs == synced_pairs:
         return
-    glossary_name = "CRC Translator - filtr przekleństw" if kind == "banned" else "CRC Translator"
+    glossary_names = {
+        "banned": "CRC Translator - filtr przekleństw",
+        "asr_fix": "CRC Translator - poprawki rozpoznawania",
+    }
+    glossary_name = glossary_names.get(kind, "CRC Translator")
+    # "asr_fix" is Palabra's glossary_type="asr" -- a same-language
+    # "wrongly-recognized form -> correct form" correction list (see
+    # app/glossary.py's module docstring), NOT a source->target
+    # translation mapping like "custom"/"banned" both are.
+    glossary_type = "asr" if kind == "asr_fix" else "translation"
     result: dict[str, object] = {}
 
     def on_finished(ok: bool, message: str, new_id: object) -> None:
         result["ok"] = ok
         result["new_id"] = new_id
 
-    worker = GlossarySaver(api_key, glossary_name, source_lang, target_lang, pairs, glossary_id)
+    worker = GlossarySaver(api_key, glossary_name, source_lang, target_lang, pairs, glossary_id, glossary_type=glossary_type)
     worker.finished.connect(on_finished, Qt.ConnectionType.QueuedConnection)
     thread = threading.Thread(target=worker.run, daemon=True)
     thread.start()
@@ -1428,6 +1439,19 @@ class MainWindow(QMainWindow):
         self.manage_profanity_btn.clicked.connect(self._on_manage_profanity)
         # Not added to this form -- see "Zaawansowane" below.
 
+        self.manage_asr_fix_btn = QPushButton(tr("Popraw błędy rozpoznawania..."))
+        self.manage_asr_fix_btn.setToolTip(
+            tr(
+                "Otwiera plik tekstowy z listą -- naprawia konkretną, obserwowaną pomyłkę"
+                " rozpoznawania mowy (np. niecodzienne imię usłyszane błędnie), niezależnie od"
+                " Glosariusza powyżej. Jedna para \"błędnie rozpoznane => poprawnie\" na linię,"
+                " oba w języku źródłowym -- dotyczy tylko obecnie wybranego języka źródłowego."
+                " Synchronizuje się z Palabrą automatycznie przy starcie sesji."
+            )
+        )
+        self.manage_asr_fix_btn.clicked.connect(self._on_manage_asr_fix)
+        # Not added to this form -- see "Zaawansowane" below.
+
         self.church_style_check = QCheckBox(tr("Styl kościelny"))
         # Off by default (was on) -- a real A/B test on the same sentence
         # showed it measurably increases visible partial-text "flicker"
@@ -1492,6 +1516,7 @@ class MainWindow(QMainWindow):
         glossary_btn_row = QHBoxLayout()
         glossary_btn_row.addWidget(self.manage_glossary_btn)
         glossary_btn_row.addWidget(self.manage_profanity_btn)
+        glossary_btn_row.addWidget(self.manage_asr_fix_btn)
         glossary_btn_row.addStretch()
         advanced_form.addRow("", glossary_btn_row)
         advanced_form.addRow("", self.church_style_check)
@@ -1786,6 +1811,7 @@ class MainWindow(QMainWindow):
             self.refresh_devices_btn,
             self.manage_glossary_btn,
             self.manage_profanity_btn,
+            self.manage_asr_fix_btn,
             self.church_style_check,
         ]
 
@@ -2037,6 +2063,12 @@ class MainWindow(QMainWindow):
 
     def _on_manage_profanity(self) -> None:
         open_glossary_file(self.source_lang_combo.currentData(), self.target_lang_combo.currentData(), kind="banned")
+
+    def _on_manage_asr_fix(self) -> None:
+        # Same-language correction list (see sync_glossary_kind_blocking) --
+        # source_lang used for both sides, independent of the target language.
+        source_lang = self.source_lang_combo.currentData()
+        open_glossary_file(source_lang, source_lang, kind="asr_fix")
 
     def _on_mic_selection_changed(self, _index: int) -> None:
         # Repopulating the channel combo for the newly selected device must
@@ -2318,6 +2350,7 @@ class MainWindow(QMainWindow):
         # changed since the last successful sync, which is the common case.
         sync_glossary_kind_blocking(creds.api_key, source_lang, target_lang, "custom")
         sync_glossary_kind_blocking(creds.api_key, source_lang, target_lang, "banned")
+        sync_glossary_kind_blocking(creds.api_key, source_lang, source_lang, "asr_fix")
 
         resolved_voice = self._resolve_selected_voice()
         if resolved_voice is None:
