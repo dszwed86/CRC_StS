@@ -557,21 +557,20 @@ class TranslationRunner:
                     # the full translated_transcription anyway) -- it's purely
                     # what makes partial subtitle text show up early.
                     translate_partials=True,
-                    # Restored to the original 0.5 (was briefly 0.3, then
-                    # 0.4 as a "middle ground" -- see git history). A real
-                    # A/B test on the same real sermon audio at 0.4 vs 0.5
-                    # found ZERO difference in segmentation (identical 17
-                    # segments, identical mid-sentence split points) --
-                    # meaning the earlier 0.3->0.4 latency tuning was never
-                    # actually buying anything on real content, since the
-                    # server's own sentence_splitter (independent of this
-                    # threshold) is what forces most mid-clause splits
-                    # anyway. 0.5 matches a much older version of this app
-                    # a real user compared side-by-side and judged to have
-                    # noticeably better translation quality -- with no
-                    # measured segmentation downside to reverting, there's
-                    # no reason left to keep it lower.
-                    silence_threshold=0.5,
+                    # Lowered back to 0.3 -- a deliberate latency-over-quality
+                    # trade-off, not a quality fix: a real A/B test on real
+                    # sermon audio found 0.4 vs 0.5 make ZERO difference to
+                    # segmentation (the server's own sentence_splitter, not
+                    # this threshold, drives most mid-clause splits), and an
+                    # older 0.5-era version of this app was judged to have
+                    # noticeably better translation quality by a real user.
+                    # 0.3 was ALREADY tried once before (see git history) and
+                    # reverted for splitting mid-sentence pauses more eagerly
+                    # than wanted -- knowingly re-accepting that cost here in
+                    # exchange for faster response time. If the "cuts off
+                    # sentence endings" complaint comes back, this is the
+                    # first thing to revert to 0.5.
+                    silence_threshold=0.3,
                     # REVERTED (see below) -- left here so the next person
                     # who considers disabling sentence_splitter again knows
                     # why it was tried and reverted, not just that it wasn't:
