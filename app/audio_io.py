@@ -50,7 +50,6 @@ CHUNK_BYTES = CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
 BYTES_PER_MS = INPUT_RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
 MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
-MAX_OUTPUT_BACKLOG_SAMPLES = int(RATE * 1.2)  # ~1.2s -- see OutputSink.play()
 STREAM_OPEN_RETRY_ATTEMPTS = 5
 STREAM_OPEN_RETRY_DELAY_SECONDS = 1.0
 # See MicStream.level/OutputSink.level: a live PortAudio callback fires
@@ -1173,7 +1172,20 @@ class OutputSink:
     """Plays received PCM chunks to a chosen output device (e.g. a virtual cable)."""
 
     def __init__(self, device: int | None = None):
-        self._q: queue.Queue[np.ndarray] = queue.Queue(maxsize=100)
+        # Unbounded: a maxsize/backlog cap here used to silently discard
+        # translated audio once the queue filled up, to keep spoken audio
+        # from drifting far behind the live subtitle text when the server
+        # generates TTS faster than real-time. Confirmed via a real user
+        # report to sometimes chew into the MIDDLE of a sentence that had
+        # already started playing (its early chunks played, a burst of
+        # its later chunks got dropped, only its last chunk survived) --
+        # heard as "plays the start of a sentence, then jumps straight to
+        # its end". Told explicitly this is unacceptable: never drop
+        # translated audio, even at the cost of the voice occasionally
+        # lagging behind the displayed text during a burst -- it self-
+        # corrects during the next pause, since nothing new arrives while
+        # the queue keeps draining at real-time rate.
+        self._q: queue.Queue[np.ndarray] = queue.Queue()
         self._buffer = np.zeros(0, dtype=np.int16)
         # Live output level (0.0-1.0, peak amplitude), for a GUI meter that
         # confirms translated audio is actually reaching the device -- not
@@ -1201,12 +1213,6 @@ class OutputSink:
         native_rate = _needs_resampling(device, RATE)
         output_rate = native_rate or RATE
         self._resampler = _LinearResampler(RATE, native_rate) if native_rate else None
-        # Scaled from MAX_OUTPUT_BACKLOG_SAMPLES (defined at RATE) to
-        # output_rate, so the ~1.2s backlog cap (see _trim_backlog) means
-        # the same thing in wall-clock time whether or not resampling is
-        # active -- self._q holds samples at output_rate now, not always
-        # RATE.
-        self._max_backlog_samples = int(MAX_OUTPUT_BACKLOG_SAMPLES * output_rate / RATE)
 
         def _open(rate: int) -> sd.OutputStream:
             return _open_with_retry(lambda: sd.OutputStream(
@@ -1232,7 +1238,6 @@ class OutputSink:
             # no audio whatsoever.
             output_rate = RATE
             self._resampler = None
-            self._max_backlog_samples = MAX_OUTPUT_BACKLOG_SAMPLES
             self._stream = _open(RATE)
 
     @property
@@ -1279,48 +1284,7 @@ class OutputSink:
             arr = self._resampler.push(arr)
             if arr.size == 0:
                 return
-        try:
-            self._q.put_nowait(arr)
-        except queue.Full:
-            pass  # drop rather than build unbounded latency
-        self._trim_backlog()
-
-    def _trim_backlog(self) -> None:
-        """Caps how far playback can fall behind the live translation.
-
-        Measured live: the server can deliver translated audio for a segment
-        slightly FASTER than that segment's own playback duration (observed
-        ~0.8-0.9x real time). With nothing bounding it, received-but-not-yet-
-        played audio piles up in self._q over the course of a session --
-        text stays live while the voice drifts further and further behind it
-        (the exact "whole sentence, even the next one, is already showing
-        before he's even started speaking it" symptom this was written to
-        fix). queue.Queue's own lock is already safely used from both this
-        thread and the realtime callback thread elsewhere in this class (see
-        _on_playback's get_nowait()), so briefly holding it here to drop the
-        OLDEST queued audio down to self._max_backlog_samples is safe --
-        unlike the custom Python lock previously removed from __init__ (see
-        _clear_requested), this doesn't hold a lock across the callback's own
-        blocking work, just a quick internal deque trim.
-        """
-        with self._q.mutex:
-            backlog = sum(len(item) for item in self._q.queue)
-            while backlog > self._max_backlog_samples and self._q.queue:
-                # Trim precisely TO the cap, not just below it: each queued
-                # item is one whole Audio event's PCM (server-sized, not
-                # bounded to any fixed chunk length by this app), so
-                # dropping it whole on popleft() alone can throw away far
-                # more translated speech than the overshoot actually
-                # requires -- an audible extra skip on top of the intended
-                # ~1.2s cap. A numpy slice is a view, not a copy, so keeping
-                # the un-trimmed tail of the oldest item is cheap.
-                oldest = self._q.queue[0]
-                overshoot = backlog - self._max_backlog_samples
-                if len(oldest) > overshoot:
-                    self._q.queue[0] = oldest[overshoot:]
-                    backlog -= overshoot
-                else:
-                    backlog -= len(self._q.queue.popleft())
+        self._q.put_nowait(arr)  # unbounded -- see __init__, never drop translated audio
 
     def clear(self) -> None:
         """Drops any buffered-but-not-yet-played audio (e.g. right after a seek).
