@@ -178,6 +178,12 @@ def probe_audio_file(path: str | Path) -> None:
 # could've been decoding for however long it sat selected first.
 _preload_events: dict[str, threading.Event] = {}
 _preload_results: dict[str, bytes | None] = {}
+# Events superseded by a later preload_file() call for a DIFFERENT path while
+# their own _work() was still decoding -- see preload_file()'s own comment.
+# A plain set keyed by object identity (Event has no custom __eq__/__hash__,
+# so this is exact and holding a real reference keeps it safe from Python
+# reusing the same id() for something unrelated later).
+_preload_stale_events: set[threading.Event] = set()
 _preload_lock = threading.Lock()
 
 
@@ -193,14 +199,19 @@ def preload_file(path: str | Path) -> None:
         # previous entry rather than accumulating one per file ever picked.
         # Without this, browsing several candidate files before starting a
         # session (a normal thing to do) pinned each one's full decoded PCM
-        # in memory for the rest of the process's life, since nothing but a
-        # matching FileStream (which only the ONE file actually started ever
-        # gets) pops an entry back out. Harmless if a FileStream for the
-        # previous path is mid-decode right now: it already popped its own
-        # event out of _preload_events before waiting on it, so clearing
-        # here can at worst wipe an about-to-be-consumed _preload_results
-        # entry, which just makes that FileStream fall back to its own
-        # synchronous decode (see _decode() below) -- not a crash.
+        # in memory for the rest of the process's life. Popping/clearing the
+        # dicts here isn't enough on its own though: the superseded path's
+        # _work() thread (started by an EARLIER preload_file() call, still
+        # running) doesn't know it's been dropped and would otherwise still
+        # write its result into _preload_results once it finishes decoding,
+        # re-leaking the exact thing this was meant to fix -- so any event(s)
+        # still sitting here (not yet claimed by a real FileStream, see
+        # below) get flagged in _preload_stale_events for _work() to check.
+        # An event a FileStream._decode() has ALREADY popped out (genuinely
+        # being consumed right now) is no longer in this dict, so it's never
+        # flagged here -- exactly the case that must be left alone.
+        for stale_event in _preload_events.values():
+            _preload_stale_events.add(stale_event)
         _preload_events.clear()
         _preload_results.clear()
         event = threading.Event()
@@ -212,7 +223,10 @@ def preload_file(path: str | Path) -> None:
         except Exception:
             pcm = None  # decode failed -- FileStream._decode() retries synchronously and reports the real error
         with _preload_lock:
-            _preload_results[key] = pcm
+            if event in _preload_stale_events:
+                _preload_stale_events.discard(event)
+            else:
+                _preload_results[key] = pcm
         event.set()
 
     threading.Thread(target=_work, daemon=True).start()
@@ -328,7 +342,13 @@ def play_test_tone(device: int | None, duration_s: float = 1.0, freq: float = 44
     """
     t = np.linspace(0, duration_s, int(RATE * duration_s), endpoint=False)
     tone = (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
-    sd.play(tone, samplerate=RATE, device=device)
+    # Same as every other stream this module opens (MicStream, OutputSink):
+    # without WASAPI's auto_convert, opening at the fixed 24kHz RATE fails
+    # outright with "Invalid sample rate" on any device whose native rate
+    # differs (in practice, nearly every real device) -- confirmed via a
+    # real QA pass where this button silently never played anything on any
+    # output device tried.
+    sd.play(tone, samplerate=RATE, device=device, extra_settings=_wasapi_extra_settings())
 
 
 _VIRTUAL_CABLE_MARKERS = ("cable", "blackhole")
