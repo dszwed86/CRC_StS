@@ -557,14 +557,21 @@ class TranslationRunner:
                     # the full translated_transcription anyway) -- it's purely
                     # what makes partial subtitle text show up early.
                     translate_partials=True,
-                    # Raised from the earlier 0.3 back up towards a middle
-                    # ground with the original 0.5 (see the A/B test measured
-                    # in the comment above this) -- real usage (a speaker who
-                    # pauses mid-sentence for emphasis, e.g. preaching) showed
-                    # 0.3 split segments more eagerly than wanted; 0.4 keeps
-                    # most of 0.3's latency win while giving pauses a bit more
-                    # room before the server calls a segment done.
-                    silence_threshold=0.4,
+                    # Restored to the original 0.5 (was briefly 0.3, then
+                    # 0.4 as a "middle ground" -- see git history). A real
+                    # A/B test on the same real sermon audio at 0.4 vs 0.5
+                    # found ZERO difference in segmentation (identical 17
+                    # segments, identical mid-sentence split points) --
+                    # meaning the earlier 0.3->0.4 latency tuning was never
+                    # actually buying anything on real content, since the
+                    # server's own sentence_splitter (independent of this
+                    # threshold) is what forces most mid-clause splits
+                    # anyway. 0.5 matches a much older version of this app
+                    # a real user compared side-by-side and judged to have
+                    # noticeably better translation quality -- with no
+                    # measured segmentation downside to reverting, there's
+                    # no reason left to keep it lower.
+                    silence_threshold=0.5,
                     # REVERTED (see below) -- left here so the next person
                     # who considers disabling sentence_splitter again knows
                     # why it was tried and reverted, not just that it wasn't:
