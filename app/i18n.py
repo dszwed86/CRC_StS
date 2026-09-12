@@ -70,6 +70,8 @@ _TRANSLATIONS: dict[str, str] = {
         "translation from a speaker) — start with a low value (15-20%) and increase "
         "only if needed."
     ),
+    "Filtr przekleństw": "Profanity filter",
+    "Filtr przekleństw...": "Profanity filter...",
     "Glosariusz": "Glossary",
     "Glosariusz...": "Glossary...",
     "Gotowy": "Ready",
@@ -159,8 +161,14 @@ _TRANSLATIONS: dict[str, str] = {
     "Otwiera ~/.sts_bridge/errors.log w domyślnym edytorze tekstu.": (
         "Opens ~/.sts_bridge/errors.log in the default text editor."
     ),
+    "Otwiera ten sam plik tekstowy w domyślnym edytorze -- można edytować listę ręcznie"
+    " (jedna para \"słowo => zamiennik\" na linię) zamiast przez to okno.": (
+        "Opens the same text file in the default editor -- you can edit the list by hand"
+        ' (one "word => replacement" pair per line) instead of through this window.'
+    ),
     "Otwórz log błędów": "Open error log",
     "Otwórz panel Palabra (saldo, użycie)": "Open Palabra dashboard (balance, usage)",
+    "Otwórz plik...": "Open file...",
     "Para językowa": "Language pair",
     "Pauza": "Pause",
     "Pauza pliku": "Pause file",
@@ -219,6 +227,7 @@ _TRANSLATIONS: dict[str, str] = {
         "reality. Enter the current value from the Palabra dashboard here to "
         "resync."
     ),
+    "Słowo do zablokowania": "Word to block",
     "Słowo źródłowe (np. Jehowa)": "Source word (e.g. Jehovah)",
     "Tego nie można cofnąć.": "This cannot be undone.",
     "Testowanie...": "Testing...",
@@ -290,6 +299,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Wyłączony": "Off",
     "Wznów": "Resume",
     "Zaawansowane": "Advanced",
+    "Zamiennik (np. [...])": "Replacement (e.g. [...])",
     "Zamknij": "Close",
     "Zamknij okienko": "Close window",
     "Zamknij okienko z tłumaczeniem": "Close translation window",
@@ -302,6 +312,20 @@ _TRANSLATIONS: dict[str, str] = {
     "Zapisz transkrypcję": "Save transcript",
     "Zapisz transkrypcję...": "Save transcript...",
     "Zapisz w Palabra": "Save to Palabra",
+    "Zastępuje wypowiedziane/rozpoznane słowa (np. przekleństwa) podanym zamiennikiem --"
+    " w tekście I w wypowiadanym głosie tłumaczenia. Dotyczy tylko powyższej pary"
+    " językowej -- dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu.": (
+        "Replaces spoken/recognized words (e.g. profanity) with the given substitute --"
+        " in the text AND in the translation's spoken voice. Applies only to the language"
+        " pair above -- for a different pair, reopen this window after selecting it."
+    ),
+    "Zastępuje wybrane słowa (np. przekleństwa) zamiennikiem -- w tekście i w"
+    " wypowiadanym głosie -- dla obecnie wybranej pary językowej. Osobna lista od"
+    " Glosariusza powyżej.": (
+        "Replaces chosen words (e.g. profanity) with a substitute -- in the text and in"
+        " the spoken voice -- for the currently selected language pair. A separate list"
+        " from the Glossary above."
+    ),
     "Zatrzymywanie...": "Stopping...",
     "Zawsze na wierzchu": "Always on top",
     "Zmiana języka aplikacji będzie widoczna po ponownym uruchomieniu.": (

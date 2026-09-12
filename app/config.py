@@ -267,12 +267,30 @@ def save_saved_voices(voices: list[dict[str, str]]) -> None:
     SAVED_VOICES_PATH.write_text(json.dumps(voices, indent=2), encoding="utf-8")
 
 
-def _glossary_key(source_lang: str, target_lang: str) -> str:
+def _glossary_key(source_lang: str, target_lang: str, kind: str = "custom") -> str:
     # A Palabra "translation"-type glossary is tied to one specific
     # (source_lang, target_lang) pair (see app/glossary.py) -- keyed the
     # same way here so each language pair the user actually translates
-    # keeps its own independent word list and remote glossary_id.
-    return f"{source_lang}->{target_lang}"
+    # keeps its own independent word list and remote glossary_id. kind
+    # distinguishes the user's own term glossary ("custom") from the
+    # profanity-filter word list ("banned") -- same mechanism, same file
+    # format, entirely independent lists/remote glossaries so toggling one
+    # never touches the other.
+    suffix = "" if kind == "custom" else f":{kind}"
+    return f"{source_lang}->{target_lang}{suffix}"
+
+
+def glossary_txt_path(source_lang: str, target_lang: str, kind: str = "custom") -> Path:
+    """The human-editable word-pair file for one language pair/kind -- can be
+    opened and edited directly in any text editor (one "source => target"
+    pair per line, blank lines and lines starting with # ignored), or via the
+    app's own Glosariusz/Filtr przekleństw dialogs, which read and write this
+    exact file. This is the single source of truth for pairs; glossary_id and
+    synced_pairs (see load_glossary_entries) are app-internal bookkeeping and
+    stay in GLOSSARY_PATH instead, since hand-editing those would only risk
+    desyncing the local state from what's actually live on Palabra."""
+    suffix = "" if kind == "custom" else f"_{kind}"
+    return CONFIG_DIR / f"glossary_{source_lang}-{target_lang}{suffix}.txt"
 
 
 def _parse_pairs(raw_pairs: Any) -> list[tuple[str, str]]:
@@ -284,6 +302,43 @@ def _parse_pairs(raw_pairs: Any) -> list[tuple[str, str]]:
     return pairs
 
 
+def _parse_txt_pairs(text: str) -> list[tuple[str, str]]:
+    """Parses the human-editable "source => target" txt format -- one pair
+    per line, "=>" as the separator (chosen over "=" or ":" since neither of
+    those can appear in a real word/phrase as unambiguously). Blank lines and
+    lines starting with # (comments) are skipped; a line without "=>" is
+    skipped rather than raising, since this file is meant to be hand-edited
+    and a typo shouldn't block loading every other valid line."""
+    pairs: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=>" not in line:
+            continue
+        src, _, tgt = line.partition("=>")
+        src, tgt = src.strip(), tgt.strip()
+        if src and tgt:
+            pairs.append((src, tgt))
+    return pairs
+
+
+def _format_txt_pairs(pairs: list[tuple[str, str]]) -> str:
+    return "".join(f"{src} => {tgt}\n" for src, tgt in pairs)
+
+
+def _read_glossary_txt(path: Path) -> list[tuple[str, str]]:
+    if not path.exists():
+        return []
+    try:
+        return _parse_txt_pairs(path.read_text(encoding="utf-8"))
+    except OSError:
+        return []
+
+
+def _write_glossary_txt(path: Path, pairs: list[tuple[str, str]]) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(_format_txt_pairs(pairs), encoding="utf-8")
+
+
 # Sentinel for save_glossary_entries' synced_pairs param: distinguishes "leave
 # whatever was last recorded as synced untouched" (the default -- used by plain
 # local edits) from "explicitly set it" (None or a real list -- used after an
@@ -292,31 +347,43 @@ _UNSET = object()
 
 
 def load_glossary_entries(
-    source_lang: str, target_lang: str
+    source_lang: str, target_lang: str, kind: str = "custom"
 ) -> tuple[list[tuple[str, str]], str | None, list[tuple[str, str]]]:
-    """Reads the local word-pair list, last-synced glossary_id, and the pair
-    list that was actually last pushed to Palabra (synced_pairs) for one
-    language pair -- the caller (GlossaryDialog) compares the local list
-    against synced_pairs to know whether it's showing unsaved changes,
-    instead of always assuming "just saved" on open. Returns ([], None, [])
-    if none saved yet, or the file is missing/corrupt -- this is edited
-    interactively, so a bad file should start the user from an empty list
-    rather than block the app."""
-    if not GLOSSARY_PATH.exists():
-        return [], None, []
-    try:
-        data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return [], None, []
-    if not isinstance(data, dict):
-        return [], None, []
-    entry = data.get(_glossary_key(source_lang, target_lang))
-    if not isinstance(entry, dict):
-        return [], None, []
-    pairs = _parse_pairs(entry.get("pairs"))
-    glossary_id = entry.get("glossary_id")
-    synced_pairs = _parse_pairs(entry.get("synced_pairs"))
-    return pairs, glossary_id if isinstance(glossary_id, str) else None, synced_pairs
+    """Reads the word-pair list (from its .txt file -- see
+    glossary_txt_path), last-synced glossary_id, and the pair list that was
+    actually last pushed to Palabra (synced_pairs, still kept in
+    GLOSSARY_PATH) for one language pair/kind -- the caller (GlossaryDialog)
+    compares the pairs against synced_pairs to know whether it's showing
+    unsaved changes, instead of always assuming "just saved" on open.
+    Returns ([], None, []) if nothing saved yet.
+
+    One-time migration: an existing install's "custom" pairs were
+    previously stored inline in GLOSSARY_PATH's JSON instead of a .txt file
+    -- if the .txt file doesn't exist yet but that old JSON field does,
+    those pairs are exported to the .txt file (and kept in the JSON too,
+    harmlessly ignored from here on) so upgrading doesn't silently lose a
+    glossary someone already built.
+    """
+    txt_path = glossary_txt_path(source_lang, target_lang, kind)
+    glossary_id: str | None = None
+    synced_pairs: list[tuple[str, str]] = []
+    if GLOSSARY_PATH.exists():
+        try:
+            data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = None
+        if isinstance(data, dict):
+            entry = data.get(_glossary_key(source_lang, target_lang, kind))
+            if isinstance(entry, dict):
+                raw_id = entry.get("glossary_id")
+                glossary_id = raw_id if isinstance(raw_id, str) else None
+                synced_pairs = _parse_pairs(entry.get("synced_pairs"))
+                if kind == "custom" and not txt_path.exists():
+                    legacy_pairs = _parse_pairs(entry.get("pairs"))
+                    if legacy_pairs:
+                        _write_glossary_txt(txt_path, legacy_pairs)
+    pairs = _read_glossary_txt(txt_path)
+    return pairs, glossary_id, synced_pairs
 
 
 def save_glossary_entries(
@@ -325,15 +392,17 @@ def save_glossary_entries(
     pairs: list[tuple[str, str]],
     glossary_id: str | None,
     synced_pairs: list[tuple[str, str]] | None = _UNSET,  # type: ignore[assignment]
+    kind: str = "custom",
 ) -> None:
-    """Writes the word-pair list and current remote glossary_id (or None,
-    if nothing has been successfully synced to Palabra yet / it was
-    cleared) for one language pair, leaving every other pair's entry in
-    the file untouched. synced_pairs records what was actually last pushed
-    to Palabra -- pass it explicitly only after a real sync attempt
-    (success -> the pairs just sent; the field is otherwise left as
-    whatever was previously recorded, since a plain local edit doesn't
-    change what's live on Palabra)."""
+    """Writes the word-pair list to its .txt file (glossary_txt_path) and the
+    current remote glossary_id (or None, if nothing has been successfully
+    synced to Palabra yet / it was cleared) to GLOSSARY_PATH, leaving every
+    other pair/kind's own entry untouched. synced_pairs records what was
+    actually last pushed to Palabra -- pass it explicitly only after a real
+    sync attempt (success -> the pairs just sent; the field is otherwise
+    left as whatever was previously recorded, since a plain local edit
+    doesn't change what's live on Palabra)."""
+    _write_glossary_txt(glossary_txt_path(source_lang, target_lang, kind), pairs)
     if GLOSSARY_PATH.exists():
         try:
             data = json.loads(GLOSSARY_PATH.read_text(encoding="utf-8"))
@@ -343,12 +412,11 @@ def save_glossary_entries(
             data = {}
     else:
         data = {}
-    key = _glossary_key(source_lang, target_lang)
+    key = _glossary_key(source_lang, target_lang, kind)
     if synced_pairs is _UNSET:
         existing_entry = data.get(key)
         synced_pairs = _parse_pairs(existing_entry.get("synced_pairs")) if isinstance(existing_entry, dict) else []
     data[key] = {
-        "pairs": [list(p) for p in pairs],
         "glossary_id": glossary_id,
         "synced_pairs": [list(p) for p in (synced_pairs or [])],
     }

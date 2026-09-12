@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -460,9 +462,17 @@ class SavedVoicesDialog(QDialog):
 
 class GlossaryDialog(QDialog):
     """Manages a local word-pair list that forces specific source->target
-    translations (e.g. proper names, terminology) for the language pair
-    currently selected in the main window, and pushes it to Palabra's
-    glossary REST API (see app/glossary.py).
+    translations for the language pair currently selected in the main
+    window, and pushes it to Palabra's glossary REST API (see
+    app/glossary.py). Doubles as the profanity-filter editor (kind="banned")
+    -- same file format and sync mechanism, entirely separate list/remote
+    glossary from the user's own terminology one (kind="custom"), so
+    toggling/editing one never touches the other.
+
+    The word list itself lives in a plain, human-editable .txt file (see
+    config.glossary_txt_path) -- "Otwórz plik" opens it in the OS's default
+    text editor, and this dialog reloads it fresh every time it's opened, so
+    external edits and edits made here stay in sync either way.
 
     There's no server-side "edit" available for an existing glossary
     (confirmed against the real API -- see glossary.py's own docstring):
@@ -473,12 +483,18 @@ class GlossaryDialog(QDialog):
     actual translations once pushed -- see the status label.
     """
 
-    def __init__(self, source_lang: str, target_lang: str, source_lang_name: str, target_lang_name: str, parent=None):
+    def __init__(
+        self, source_lang: str, target_lang: str, source_lang_name: str, target_lang_name: str,
+        parent=None, kind: str = "custom",
+    ):
         super().__init__(parent)
-        self.setWindowTitle(tr("Glosariusz"))
+        self._kind = kind
+        self.setWindowTitle(tr("Filtr przekleństw") if kind == "banned" else tr("Glosariusz"))
         self._source_lang = source_lang
         self._target_lang = target_lang
-        self._pairs, self._glossary_id, synced_pairs = config.load_glossary_entries(source_lang, target_lang)
+        self._pairs, self._glossary_id, synced_pairs = config.load_glossary_entries(
+            source_lang, target_lang, kind=kind
+        )
         # Dirty means "the local list differs from what was actually last
         # pushed to Palabra" -- computed from the persisted synced_pairs
         # rather than always assuming False on open, otherwise reopening the
@@ -491,13 +507,23 @@ class GlossaryDialog(QDialog):
         pair_label = QLabel(f"{tr('Para językowa')}: {source_lang_name} → {target_lang_name}")
         pair_label.setStyleSheet("font-weight: bold;")
 
-        hint = QLabel(
-            tr(
+        if kind == "banned":
+            hint_text = tr(
+                "Zastępuje wypowiedziane/rozpoznane słowa (np. przekleństwa) podanym zamiennikiem --"
+                " w tekście I w wypowiadanym głosie tłumaczenia. Dotyczy tylko powyższej pary"
+                " językowej -- dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu."
+            )
+            source_placeholder = tr("Słowo do zablokowania")
+            target_placeholder = tr("Zamiennik (np. [...])")
+        else:
+            hint_text = tr(
                 "Wymusza dokładne tłumaczenie podanych słów/fraz (np. imion biblijnych) zamiast"
                 " tego, co Palabra przetłumaczyłaby sama. Dotyczy tylko powyższej pary językowej --"
                 " dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu."
             )
-        )
+            source_placeholder = tr("Słowo źródłowe (np. Jehowa)")
+            target_placeholder = tr("Tłumaczenie (np. Jehovah)")
+        hint = QLabel(hint_text)
         hint.setWordWrap(True)
 
         self.list_widget = QListWidget()
@@ -505,9 +531,9 @@ class GlossaryDialog(QDialog):
 
         add_row = QHBoxLayout()
         self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText(tr("Słowo źródłowe (np. Jehowa)"))
+        self.source_edit.setPlaceholderText(source_placeholder)
         self.target_edit = QLineEdit()
-        self.target_edit.setPlaceholderText(tr("Tłumaczenie (np. Jehovah)"))
+        self.target_edit.setPlaceholderText(target_placeholder)
         add_row.addWidget(self.source_edit)
         add_row.addWidget(self.target_edit)
 
@@ -537,12 +563,22 @@ class GlossaryDialog(QDialog):
         )
         manage_btn.clicked.connect(self._on_manage_all)
 
+        open_file_btn = QPushButton(tr("Otwórz plik..."))
+        open_file_btn.setToolTip(
+            tr(
+                "Otwiera ten sam plik tekstowy w domyślnym edytorze -- można edytować listę ręcznie"
+                " (jedna para \"słowo => zamiennik\" na linię) zamiast przez to okno."
+            )
+        )
+        open_file_btn.clicked.connect(self._on_open_file)
+
         save_row = QHBoxLayout()
         self.save_btn = QPushButton(tr("Zapisz w Palabra"))
         self.save_btn.clicked.connect(self._on_save)
         close_btn = QPushButton(tr("Zamknij"))
         close_btn.clicked.connect(self.close)
         save_row.addWidget(self.save_btn)
+        save_row.addWidget(open_file_btn)
         save_row.addWidget(manage_btn)
         save_row.addStretch()
         save_row.addWidget(close_btn)
@@ -557,6 +593,19 @@ class GlossaryDialog(QDialog):
         layout.addLayout(save_row)
 
         self._update_status_label()
+
+    def _on_open_file(self) -> None:
+        path = config.glossary_txt_path(self._source_lang, self._target_lang, kind=self._kind)
+        if not path.exists():
+            config.save_glossary_entries(
+                self._source_lang, self._target_lang, self._pairs, self._glossary_id, kind=self._kind
+            )
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606 -- opening a local file the app itself just wrote, in its default editor
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=False)
 
     def _refresh_list(self) -> None:
         self.list_widget.clear()
@@ -584,7 +633,9 @@ class GlossaryDialog(QDialog):
             return
         self._pairs.append((src, tgt))
         self._dirty = True
-        config.save_glossary_entries(self._source_lang, self._target_lang, self._pairs, self._glossary_id)
+        config.save_glossary_entries(
+            self._source_lang, self._target_lang, self._pairs, self._glossary_id, kind=self._kind
+        )
         self.source_edit.clear()
         self.target_edit.clear()
         self._refresh_list()
@@ -596,7 +647,9 @@ class GlossaryDialog(QDialog):
             return
         del self._pairs[row]
         self._dirty = True
-        config.save_glossary_entries(self._source_lang, self._target_lang, self._pairs, self._glossary_id)
+        config.save_glossary_entries(
+            self._source_lang, self._target_lang, self._pairs, self._glossary_id, kind=self._kind
+        )
         self._refresh_list()
         self._update_status_label()
 
@@ -619,8 +672,9 @@ class GlossaryDialog(QDialog):
         self.status_label.setText(tr("Zapisywanie..."))
 
         sent_pairs = list(self._pairs)
+        glossary_name = "CRC Translator - filtr przekleństw" if self._kind == "banned" else "CRC Translator"
         worker = GlossarySaver(
-            creds.api_key, "CRC Translator", self._source_lang, self._target_lang,
+            creds.api_key, glossary_name, self._source_lang, self._target_lang,
             sent_pairs, self._glossary_id,
         )
         worker.finished.connect(
@@ -645,7 +699,8 @@ class GlossaryDialog(QDialog):
             # keeps the check correct instead of assuming "still False").
             self._dirty = self._pairs != sent_pairs
             config.save_glossary_entries(
-                self._source_lang, self._target_lang, self._pairs, self._glossary_id, synced_pairs=sent_pairs
+                self._source_lang, self._target_lang, self._pairs, self._glossary_id,
+                synced_pairs=sent_pairs, kind=self._kind,
             )
             self.status_label.setStyleSheet(f"color: {theme.SUCCESS};")
             self.status_label.setText(f"✓ {message}")
@@ -1537,6 +1592,17 @@ class MainWindow(QMainWindow):
         self.manage_glossary_btn.clicked.connect(self._on_manage_glossary)
         # Not added to this form -- see "Zaawansowane" below.
 
+        self.manage_profanity_btn = QPushButton(tr("Filtr przekleństw..."))
+        self.manage_profanity_btn.setToolTip(
+            tr(
+                "Zastępuje wybrane słowa (np. przekleństwa) zamiennikiem -- w tekście i w"
+                " wypowiadanym głosie -- dla obecnie wybranej pary językowej. Osobna lista od"
+                " Glosariusza powyżej."
+            )
+        )
+        self.manage_profanity_btn.clicked.connect(self._on_manage_profanity)
+        # Not added to this form -- see "Zaawansowane" below.
+
         self.church_style_check = QCheckBox(tr("Styl kościelny"))
         self.church_style_check.setChecked(True)
         self.church_style_check.setToolTip(
@@ -1591,6 +1657,7 @@ class MainWindow(QMainWindow):
         # centered, which read as a text field rather than a button.
         glossary_btn_row = QHBoxLayout()
         glossary_btn_row.addWidget(self.manage_glossary_btn)
+        glossary_btn_row.addWidget(self.manage_profanity_btn)
         glossary_btn_row.addStretch()
         advanced_form.addRow("", glossary_btn_row)
         advanced_form.addRow("", self.church_style_check)
@@ -1884,6 +1951,7 @@ class MainWindow(QMainWindow):
             self.manage_voices_btn,
             self.refresh_devices_btn,
             self.manage_glossary_btn,
+            self.manage_profanity_btn,
             self.church_style_check,
         ]
 
@@ -2137,6 +2205,15 @@ class MainWindow(QMainWindow):
             source_lang, target_lang,
             self.source_lang_combo.currentText(), self.target_lang_combo.currentText(),
             self,
+        ).exec()
+
+    def _on_manage_profanity(self) -> None:
+        source_lang = self.source_lang_combo.currentData()
+        target_lang = self.target_lang_combo.currentData()
+        GlossaryDialog(
+            source_lang, target_lang,
+            self.source_lang_combo.currentText(), self.target_lang_combo.currentText(),
+            self, kind="banned",
         ).exec()
 
     def _on_mic_selection_changed(self, _index: int) -> None:
