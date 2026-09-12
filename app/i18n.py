@@ -15,10 +15,8 @@ _current_lang = LANG_PL
 
 _TRANSLATIONS: dict[str, str] = {
     "(nie wybrano pliku)": "(no file selected)",
-    "Aktywny w Palabra.": "Active in Palabra.",
     "Audio/Video": "Audio/Video",
     "Brak ID głosu": "No voice ID",
-    "Brak aktywnego glosariusza dla tej pary językowej.": "No active glossary for this language pair.",
     "Brak błędów": "No errors",
     "Brak danych": "Missing data",
     "Brak glosariuszy na koncie.": "No glossaries on the account.",
@@ -70,9 +68,7 @@ _TRANSLATIONS: dict[str, str] = {
         "translation from a speaker) — start with a low value (15-20%) and increase "
         "only if needed."
     ),
-    "Filtr przekleństw": "Profanity filter",
     "Filtr przekleństw...": "Profanity filter...",
-    "Glosariusz": "Glossary",
     "Glosariusz...": "Glossary...",
     "Gotowy": "Ready",
     "Głos:": "Voice:",
@@ -136,9 +132,6 @@ _TRANSLATIONS: dict[str, str] = {
     "Nieprawidłowy klucz API": "Invalid API key",
     "Nieprawidłowy plik": "Invalid file",
     "Nieprzezroczystość tła:": "Background opacity:",
-    'Niezapisane zmiany -- kliknij "Zapisz w Palabra", żeby zaczęły obowiązywać.': (
-        'Unsaved changes -- click "Save to Palabra" for them to take effect.'
-    ),
     "Odczep okienko z tłumaczeniem": "Detach translation window",
     "Odebrane przetłumaczone audio nie jest odtwarzane na wybrane wyjście -- zostaje "
     "tylko tekst (log/overlay). Palabra API nie oferuje trybu bez syntezy mowy, więc "
@@ -161,15 +154,8 @@ _TRANSLATIONS: dict[str, str] = {
     "Otwiera ~/.sts_bridge/errors.log w domyślnym edytorze tekstu.": (
         "Opens ~/.sts_bridge/errors.log in the default text editor."
     ),
-    "Otwiera ten sam plik tekstowy w domyślnym edytorze -- można edytować listę ręcznie"
-    " (jedna para \"słowo => zamiennik\" na linię) zamiast przez to okno.": (
-        "Opens the same text file in the default editor -- you can edit the list by hand"
-        ' (one "word => replacement" pair per line) instead of through this window.'
-    ),
     "Otwórz log błędów": "Open error log",
     "Otwórz panel Palabra (saldo, użycie)": "Open Palabra dashboard (balance, usage)",
-    "Otwórz plik...": "Open file...",
-    "Para językowa": "Language pair",
     "Pauza": "Pause",
     "Pauza pliku": "Pause file",
     "Plik (opcjonalnie):": "File (optional):",
@@ -179,14 +165,13 @@ _TRANSLATIONS: dict[str, str] = {
     ),
     "Podaj klucz API przed zapisaniem.": "Enter an API key before saving.",
     "Podaj nazwę i ID głosu.": "Enter a name and a voice ID.",
-    "Podaj słowo źródłowe i jego tłumaczenie.": "Enter a source word and its translation.",
     "Podgląd tłumaczenia": "Translation preview",
-    "Pokazuje wszystkie glosariusze zapisane na koncie Palabra (nie tylko dla tej pary"
-    " językowej) i pozwala usunąć dowolny z nich -- przydatne, jeśli jakiś pozostał"
+    "Pokazuje wszystkie glosariusze zapisane na koncie Palabra (nie tylko te, o których"
+    " wie ta aplikacja) i pozwala usunąć dowolny z nich -- przydatne, jeśli jakiś pozostał"
     " aktywny mimo utraty lokalnego zapisu w tej aplikacji.": (
-        "Shows every glossary saved on the Palabra account (not just for this language"
-        " pair) and lets you delete any of them -- useful if one stayed active despite"
-        " losing the local record in this app."
+        "Shows every glossary saved on the Palabra account (not just the ones this app"
+        " knows about) and lets you delete any of them -- useful if one stayed active"
+        " despite losing the local record in this app."
     ),
     "Pokaż w logu:": "Show in log:",
     "Pokaż:": "Show:",
@@ -227,8 +212,6 @@ _TRANSLATIONS: dict[str, str] = {
         "reality. Enter the current value from the Palabra dashboard here to "
         "resync."
     ),
-    "Słowo do zablokowania": "Word to block",
-    "Słowo źródłowe (np. Jehowa)": "Source word (e.g. Jehovah)",
     "Tego nie można cofnąć.": "This cannot be undone.",
     "Testowanie...": "Testing...",
     "Testuj klucz": "Test key",
@@ -237,11 +220,7 @@ _TRANSLATIONS: dict[str, str] = {
     "Tylko tłumaczenie": "Translation only",
     "Tylko źródłowy": "Source only",
     "Tłumaczenie": "Translation",
-    "Tłumaczenie (np. Jehovah)": "Translation (e.g. Jehovah)",
     "Ustaw klucz API w Ustawieniach przed rozpoczęciem.": "Set an API key in Settings before starting.",
-    "Ustaw klucz API w Ustawieniach przed zapisem glosariusza.": (
-        "Set an API key in Settings before saving the glossary."
-    ),
     "Ustaw klucz API w Ustawieniach przed zarządzaniem glosariuszami.": (
         "Set an API key in Settings before managing glossaries."
     ),
@@ -257,7 +236,6 @@ _TRANSLATIONS: dict[str, str] = {
     "Usunąć glosariusz?": "Delete glossary?",
     "Usuwanie...": "Deleting...",
     "Usuń wybrany plik": "Remove the selected file",
-    "Usuń zaznaczone": "Remove selected",
     "Usuń zaznaczony": "Remove selected",
     "Wczytywanie...": "Loading...",
     "Wpisz klucz API przed testem.": "Enter an API key before testing.",
@@ -282,24 +260,19 @@ _TRANSLATIONS: dict[str, str] = {
     "Wyczyścić historię?": "Clear history?",
     "Wyczyść historię": "Clear history",
     "Wyczyść transkrypcję": "Clear transcript",
-    "Wymusza dokładne tłumaczenie podanych słów/fraz (np. imion biblijnych) zamiast"
-    " tego, co Palabra przetłumaczyłaby sama. Dotyczy tylko powyższej pary językowej --"
-    " dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu.": (
-        "Forces exact translation of the given words/phrases (e.g. biblical names) instead"
-        " of whatever Palabra would translate them to on its own. Applies only to the"
-        " language pair above -- for a different pair, reopen this window after selecting it."
-    ),
-    "Wymuś własne tłumaczenie konkretnych słów/imion (np. biblijnych) dla obecnie"
-    " wybranej pary językowej -- zamiast tego, co Palabra przetłumaczyłaby sama.": (
-        "Force your own translation of specific words/names (e.g. biblical) for the"
-        " currently selected language pair -- instead of whatever Palabra would translate"
-        " them to on its own."
+    "Otwiera plik tekstowy z listą (jedna para \"słowo => tłumaczenie\" na linię) --"
+    " wymusza własne tłumaczenie konkretnych słów/imion (np. biblijnych) dla obecnie"
+    " wybranej pary językowej, zamiast tego, co Palabra przetłumaczyłaby sama."
+    " Synchronizuje się z Palabrą automatycznie przy starcie sesji.": (
+        "Opens a text file with the list (one \"word => translation\" pair per line) --"
+        " forces your own translation of specific words/names (e.g. biblical) for the"
+        " currently selected language pair, instead of whatever Palabra would translate"
+        " them to on its own. Syncs to Palabra automatically when a session starts."
     ),
     "Wyjście:": "Output:",
     "Wyłączony": "Off",
     "Wznów": "Resume",
     "Zaawansowane": "Advanced",
-    "Zamiennik (np. [...])": "Replacement (e.g. [...])",
     "Zamknij": "Close",
     "Zamknij okienko": "Close window",
     "Zamknij okienko z tłumaczeniem": "Close translation window",
@@ -308,23 +281,16 @@ _TRANSLATIONS: dict[str, str] = {
     "Zapisane głosy": "Saved voices",
     "Zapisane głosy...": "Saved voices...",
     "Zapisano w Palabra.": "Saved to Palabra.",
-    "Zapisywanie...": "Saving...",
     "Zapisz transkrypcję": "Save transcript",
     "Zapisz transkrypcję...": "Save transcript...",
-    "Zapisz w Palabra": "Save to Palabra",
-    "Zastępuje wypowiedziane/rozpoznane słowa (np. przekleństwa) podanym zamiennikiem --"
-    " w tekście I w wypowiadanym głosie tłumaczenia. Dotyczy tylko powyższej pary"
-    " językowej -- dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu.": (
-        "Replaces spoken/recognized words (e.g. profanity) with the given substitute --"
-        " in the text AND in the translation's spoken voice. Applies only to the language"
-        " pair above -- for a different pair, reopen this window after selecting it."
-    ),
-    "Zastępuje wybrane słowa (np. przekleństwa) zamiennikiem -- w tekście i w"
-    " wypowiadanym głosie -- dla obecnie wybranej pary językowej. Osobna lista od"
-    " Glosariusza powyżej.": (
-        "Replaces chosen words (e.g. profanity) with a substitute -- in the text and in"
-        " the spoken voice -- for the currently selected language pair. A separate list"
-        " from the Glossary above."
+    "Otwiera plik tekstowy z listą -- zastępuje wybrane słowa (np. przekleństwa)"
+    " zamiennikiem, w tekście i w wypowiadanym głosie, dla obecnie wybranej pary"
+    " językowej. Osobna lista od Glosariusza powyżej, synchronizuje się z Palabrą"
+    " automatycznie przy starcie sesji.": (
+        "Opens a text file with the list -- replaces chosen words (e.g. profanity) with a"
+        " substitute, in the text and in the spoken voice, for the currently selected"
+        " language pair. A separate list from the Glossary above, syncs to Palabra"
+        " automatically when a session starts."
     ),
     "Zatrzymywanie...": "Stopping...",
     "Zawsze na wierzchu": "Always on top",

@@ -240,6 +240,16 @@ class SettingsDialog(QDialog):
         self.history_btn = QPushButton(tr("Historia sesji..."))
         self.history_btn.clicked.connect(self._on_open_history)
 
+        self.manage_glossaries_btn = QPushButton(tr("Wszystkie glosariusze na koncie..."))
+        self.manage_glossaries_btn.setToolTip(
+            tr(
+                "Pokazuje wszystkie glosariusze zapisane na koncie Palabra (nie tylko te, o których"
+                " wie ta aplikacja) i pozwala usunąć dowolny z nich -- przydatne, jeśli jakiś pozostał"
+                " aktywny mimo utraty lokalnego zapisu w tej aplikacji."
+            )
+        )
+        self.manage_glossaries_btn.clicked.connect(self._on_manage_all_glossaries)
+
         self.test_result_label = QLabel("")
         self.test_result_label.setWordWrap(True)
 
@@ -255,6 +265,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
         layout.addLayout(test_row)
         layout.addWidget(self.history_btn)
+        layout.addWidget(self.manage_glossaries_btn)
         layout.addWidget(self.test_result_label)
         layout.addWidget(buttons)
         layout.addWidget(version_label)
@@ -287,6 +298,9 @@ class SettingsDialog(QDialog):
 
     def _on_open_history(self) -> None:
         SessionHistoryDialog(self).exec()
+
+    def _on_manage_all_glossaries(self) -> None:
+        GlossaryManagerDialog(self).exec()
 
     def _on_open_dashboard(self) -> None:
         QDesktopServices.openUrl(QUrl(DASHBOARD_URL))
@@ -460,279 +474,81 @@ class SavedVoicesDialog(QDialog):
         self._refresh_list()
 
 
-class GlossaryDialog(QDialog):
-    """Manages a local word-pair list that forces specific source->target
-    translations for the language pair currently selected in the main
-    window, and pushes it to Palabra's glossary REST API (see
-    app/glossary.py). Doubles as the profanity-filter editor (kind="banned")
-    -- same file format and sync mechanism, entirely separate list/remote
-    glossary from the user's own terminology one (kind="custom"), so
-    toggling/editing one never touches the other.
+def open_glossary_file(source_lang: str, target_lang: str, kind: str = "custom") -> None:
+    """Opens the plain, human-editable word-pair .txt file for one language
+    pair/kind (see config.glossary_txt_path) directly in the OS's default
+    text editor -- "Glosariusz.../Filtr przekleństw..." just call this now,
+    with no separate in-app list/Dodaj/Usuń dialog: editing a text file
+    directly turned out to be the actually-wanted interface (a real user
+    found the dialog itself "przekombinowane" -- overcomplicated), and it's
+    still synced to Palabra automatically -- see sync_glossary_kind_blocking,
+    called right before a session starts.
 
-    The word list itself lives in a plain, human-editable .txt file (see
-    config.glossary_txt_path) -- "Otwórz plik" opens it in the OS's default
-    text editor, and this dialog reloads it fresh every time it's opened, so
-    external edits and edits made here stay in sync either way.
-
-    There's no server-side "edit" available for an existing glossary
-    (confirmed against the real API -- see glossary.py's own docstring):
-    every sync deletes whatever glossary previously represented this
-    language pair (if any) and uploads a fresh one with the current list.
-    Local edits (Dodaj/Usuń) are saved to disk immediately so they survive
-    closing the dialog, and sync to Palabra automatically when the dialog
-    closes if anything changed (see closeEvent) -- no separate "Save"
-    button/step to forget, which was the exact confusion a real user
-    reported ("dodaję słowo i ono znika" -- it was saved locally but never
-    pushed, because the manual save step was easy to miss).
+    kind="custom" is the user's own terminology/proper-name overrides;
+    kind="banned" is the profanity filter -- entirely separate files/remote
+    glossaries, see config._glossary_key.
     """
+    # Ensures the file exists before handing it to an external editor --
+    # load_glossary_entries only writes it as a side effect for kind="banned"
+    # (seeded with defaults) or a legacy-JSON migration, NOT for a brand new
+    # kind="custom" pair with nothing to migrate, which would otherwise open
+    # a path that doesn't exist yet.
+    pairs, glossary_id, _ = config.load_glossary_entries(source_lang, target_lang, kind=kind)
+    path = config.glossary_txt_path(source_lang, target_lang, kind=kind)
+    if not path.exists():
+        config.save_glossary_entries(source_lang, target_lang, pairs, glossary_id, kind=kind)
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606 -- opening a local file the app itself just wrote, in its default editor
+    elif sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+    else:
+        subprocess.run(["xdg-open", str(path)], check=False)
 
-    def __init__(
-        self, source_lang: str, target_lang: str, source_lang_name: str, target_lang_name: str,
-        parent=None, kind: str = "custom",
-    ):
-        super().__init__(parent)
-        self._kind = kind
-        self.setWindowTitle(tr("Filtr przekleństw") if kind == "banned" else tr("Glosariusz"))
-        self._source_lang = source_lang
-        self._target_lang = target_lang
-        self._pairs, self._glossary_id, synced_pairs = config.load_glossary_entries(
-            source_lang, target_lang, kind=kind
-        )
-        # Dirty means "the local list differs from what was actually last
-        # pushed to Palabra" -- computed from the persisted synced_pairs
-        # rather than always assuming False on open, otherwise reopening the
-        # dialog after closing without saving would falsely show a green
-        # "Aktywny w Palabra." status for a list that was never actually sent.
-        self._dirty = self._pairs != synced_pairs
-        self._saver_worker: GlossarySaver | None = None
-        self._saver_thread: threading.Thread | None = None
 
-        pair_label = QLabel(f"{tr('Para językowa')}: {source_lang_name} → {target_lang_name}")
-        pair_label.setStyleSheet("font-weight: bold;")
+def sync_glossary_kind_blocking(api_key: str, source_lang: str, target_lang: str, kind: str) -> None:
+    """Pushes source_lang/target_lang's kind glossary to Palabra if the .txt
+    file has changed since the last successful sync -- a no-op (no network
+    call at all) when nothing changed, which is the common case on every
+    Start. Called synchronously (blocks via a nested Qt event loop, same
+    pattern GlossaryDialog's closeEvent used to use) right before a session
+    actually starts, since editing the .txt file directly (see
+    open_glossary_file) gives the app no other signal for "the user is done
+    editing, sync now" -- capped at a few seconds so a slow/dead network
+    can't hang Start indefinitely; if it times out, the session still starts
+    with whatever was last successfully synced.
+    """
+    pairs, glossary_id, synced_pairs = config.load_glossary_entries(source_lang, target_lang, kind=kind)
+    if pairs == synced_pairs:
+        return
+    glossary_name = "CRC Translator - filtr przekleństw" if kind == "banned" else "CRC Translator"
+    result: dict[str, object] = {}
 
-        if kind == "banned":
-            hint_text = tr(
-                "Zastępuje wypowiedziane/rozpoznane słowa (np. przekleństwa) podanym zamiennikiem --"
-                " w tekście I w wypowiadanym głosie tłumaczenia. Dotyczy tylko powyższej pary"
-                " językowej -- dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu."
-            )
-            source_placeholder = tr("Słowo do zablokowania")
-            target_placeholder = tr("Zamiennik (np. [...])")
-        else:
-            hint_text = tr(
-                "Wymusza dokładne tłumaczenie podanych słów/fraz (np. imion biblijnych) zamiast"
-                " tego, co Palabra przetłumaczyłaby sama. Dotyczy tylko powyższej pary językowej --"
-                " dla innej pary trzeba otworzyć to okno ponownie po jej wybraniu."
-            )
-            source_placeholder = tr("Słowo źródłowe (np. Jehowa)")
-            target_placeholder = tr("Tłumaczenie (np. Jehovah)")
-        hint = QLabel(hint_text)
-        hint.setWordWrap(True)
+    def on_finished(ok: bool, message: str, new_id: object) -> None:
+        result["ok"] = ok
+        result["new_id"] = new_id
 
-        self.list_widget = QListWidget()
-        self._refresh_list()
+    worker = GlossarySaver(api_key, glossary_name, source_lang, target_lang, pairs, glossary_id)
+    worker.finished.connect(on_finished, Qt.ConnectionType.QueuedConnection)
+    thread = threading.Thread(target=worker.run, daemon=True)
+    thread.start()
 
-        add_row = QHBoxLayout()
-        self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText(source_placeholder)
-        self.target_edit = QLineEdit()
-        self.target_edit.setPlaceholderText(target_placeholder)
-        add_row.addWidget(self.source_edit)
-        add_row.addWidget(self.target_edit)
+    wait_loop = QEventLoop()
+    poll_timer = QTimer()
+    poll_timer.timeout.connect(lambda: None if thread.is_alive() else wait_loop.quit())
+    poll_timer.start(50)
+    safety_timer = QTimer()
+    safety_timer.setSingleShot(True)
+    safety_timer.timeout.connect(wait_loop.quit)
+    safety_timer.start(5000)
+    wait_loop.exec()
 
-        btn_row = QHBoxLayout()
-        self.add_btn = QPushButton(tr("Dodaj"))
-        self.add_btn.clicked.connect(self._on_add)
-        self.remove_btn = QPushButton(tr("Usuń zaznaczone"))
-        self.remove_btn.clicked.connect(self._on_remove)
-        btn_row.addWidget(self.add_btn)
-        btn_row.addWidget(self.remove_btn)
-        btn_row.addStretch()
-
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-        # Defense-in-depth alongside _request()'s own truncation of non-JSON
-        # error bodies: even a truncated HTML-ish message shouldn't be given
-        # a chance to rich-text-render and distort this dialog's layout.
-        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
-
-        manage_btn = QPushButton(tr("Wszystkie glosariusze na koncie..."))
-        manage_btn.setToolTip(
-            tr(
-                "Pokazuje wszystkie glosariusze zapisane na koncie Palabra (nie tylko dla tej pary"
-                " językowej) i pozwala usunąć dowolny z nich -- przydatne, jeśli jakiś pozostał"
-                " aktywny mimo utraty lokalnego zapisu w tej aplikacji."
-            )
-        )
-        manage_btn.clicked.connect(self._on_manage_all)
-
-        open_file_btn = QPushButton(tr("Otwórz plik..."))
-        open_file_btn.setToolTip(
-            tr(
-                "Otwiera ten sam plik tekstowy w domyślnym edytorze -- można edytować listę ręcznie"
-                " (jedna para \"słowo => zamiennik\" na linię) zamiast przez to okno."
-            )
-        )
-        open_file_btn.clicked.connect(self._on_open_file)
-
-        save_row = QHBoxLayout()
-        close_btn = QPushButton(tr("Zamknij"))
-        close_btn.clicked.connect(self.close)
-        save_row.addWidget(open_file_btn)
-        save_row.addWidget(manage_btn)
-        save_row.addStretch()
-        save_row.addWidget(close_btn)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(pair_label)
-        layout.addWidget(hint)
-        layout.addWidget(self.list_widget)
-        layout.addLayout(add_row)
-        layout.addLayout(btn_row)
-        layout.addWidget(self.status_label)
-        layout.addLayout(save_row)
-
-        self._update_status_label()
-
-    def _on_open_file(self) -> None:
-        path = config.glossary_txt_path(self._source_lang, self._target_lang, kind=self._kind)
-        if not path.exists():
-            config.save_glossary_entries(
-                self._source_lang, self._target_lang, self._pairs, self._glossary_id, kind=self._kind
-            )
-        if sys.platform == "win32":
-            os.startfile(path)  # noqa: S606 -- opening a local file the app itself just wrote, in its default editor
-        elif sys.platform == "darwin":
-            subprocess.run(["open", str(path)], check=False)
-        else:
-            subprocess.run(["xdg-open", str(path)], check=False)
-
-    def _refresh_list(self) -> None:
-        self.list_widget.clear()
-        for src, tgt in self._pairs:
-            self.list_widget.addItem(f"{src} → {tgt}")
-
-    def _update_status_label(self) -> None:
-        if self._dirty:
-            self.status_label.setStyleSheet(f"color: {theme.WARNING};")
-            self.status_label.setText(tr("Niezapisane zmiany -- zostaną wysłane po zamknięciu tego okna."))
-        elif self._glossary_id is not None:
-            self.status_label.setStyleSheet(f"color: {theme.SUCCESS};")
-            self.status_label.setText(tr("Aktywny w Palabra."))
-        else:
-            self.status_label.setStyleSheet("")
-            self.status_label.setText(tr("Brak aktywnego glosariusza dla tej pary językowej."))
-
-    def _on_add(self) -> None:
-        src = self.source_edit.text().strip()
-        tgt = self.target_edit.text().strip()
-        if not src or not tgt:
-            QMessageBox.warning(self, tr("Brak danych"), tr("Podaj słowo źródłowe i jego tłumaczenie."))
-            return
-        self._pairs.append((src, tgt))
-        self._dirty = True
+    if result.get("ok"):
         config.save_glossary_entries(
-            self._source_lang, self._target_lang, self._pairs, self._glossary_id, kind=self._kind
+            source_lang, target_lang, pairs, result["new_id"], synced_pairs=pairs, kind=kind
         )
-        self.source_edit.clear()
-        self.target_edit.clear()
-        self._refresh_list()
-        self._update_status_label()
-
-    def _on_remove(self) -> None:
-        row = self.list_widget.currentRow()
-        if row < 0:
-            return
-        del self._pairs[row]
-        self._dirty = True
-        config.save_glossary_entries(
-            self._source_lang, self._target_lang, self._pairs, self._glossary_id, kind=self._kind
-        )
-        self._refresh_list()
-        self._update_status_label()
-
-    def _start_sync(self) -> None:
-        """Pushes the current pairs to Palabra -- called automatically from
-        closeEvent when there are unsaved changes (see class docstring for
-        why there's no manual "Save" button/step anymore)."""
-        creds = config.load_credentials()
-        if not creds.api_key:
-            # No key set: local edits are already safe on disk (see
-            # _on_add/_on_remove), just can't reach Palabra yet -- closeEvent
-            # lets the window close anyway rather than blocking the user.
-            return
-        # Also block local edits for the duration of the save: GlossarySaver
-        # captures a snapshot of self._pairs at dispatch time below, so an
-        # edit made while the save is in flight would be silently lost --
-        # the dialog would still end up reporting "✓ Zapisano w Palabra."
-        # for a list that was never actually sent.
-        self.add_btn.setEnabled(False)
-        self.remove_btn.setEnabled(False)
-        self.status_label.setStyleSheet("")
-        self.status_label.setText(tr("Zapisywanie..."))
-
-        sent_pairs = list(self._pairs)
-        glossary_name = "CRC Translator - filtr przekleństw" if self._kind == "banned" else "CRC Translator"
-        worker = GlossarySaver(
-            creds.api_key, glossary_name, self._source_lang, self._target_lang,
-            sent_pairs, self._glossary_id,
-        )
-        worker.finished.connect(
-            lambda ok, message, new_id: self._on_save_finished(ok, message, new_id, sent_pairs),
-            Qt.ConnectionType.QueuedConnection,
-        )
-        thread = threading.Thread(target=worker.run, daemon=True)
-        self._saver_worker = worker
-        self._saver_thread = thread
-        thread.start()
-
-    def _on_save_finished(self, ok: bool, message: str, new_glossary_id: object, sent_pairs: list[tuple[str, str]]) -> None:
-        self.add_btn.setEnabled(True)
-        self.remove_btn.setEnabled(True)
-        self._saver_worker = None
-        self._saver_thread = None
-        if ok:
-            self._glossary_id = new_glossary_id
-            # Dirty only if the list changed again after this save was sent
-            # (impossible right now since edits were blocked above, but this
-            # keeps the check correct instead of assuming "still False").
-            self._dirty = self._pairs != sent_pairs
-            config.save_glossary_entries(
-                self._source_lang, self._target_lang, self._pairs, self._glossary_id,
-                synced_pairs=sent_pairs, kind=self._kind,
-            )
-            self.status_label.setStyleSheet(f"color: {theme.SUCCESS};")
-            self.status_label.setText(f"✓ {message}")
-        else:
-            self.status_label.setStyleSheet(f"color: {theme.DANGER};")
-            self.status_label.setText(f"✗ {message}")
-
-    def _on_manage_all(self) -> None:
-        GlossaryManagerDialog(self).exec()
-
-    def closeEvent(self, event) -> None:
-        # Auto-sync on close instead of requiring a manual "Save" step (see
-        # class docstring) -- only kicks off if nothing is already in flight
-        # and there's actually something unsent.
-        if self._saver_thread is None and self._dirty:
-            self._start_sync()
-        # Waits for the save thread so closing (or reopening) the dialog
-        # mid-save can't let a stale, already-superseded glossary_id get
-        # written back to disk -- which would silently orphan whichever
-        # glossary the in-flight save was about to make active (see
-        # app/glossary.py's module docstring).
-        if self._saver_thread is not None:
-            thread = self._saver_thread
-            wait_loop = QEventLoop()
-            poll_timer = QTimer()
-            poll_timer.timeout.connect(lambda: None if thread.is_alive() else wait_loop.quit())
-            poll_timer.start(50)
-            safety_timer = QTimer()
-            safety_timer.setSingleShot(True)
-            safety_timer.timeout.connect(wait_loop.quit)
-            safety_timer.start(3000)
-            wait_loop.exec()
-        super().closeEvent(event)
+    # A failure (including a timeout, where "ok" was never set) is silently
+    # skipped rather than blocking/alerting on every Start -- the .txt file
+    # itself is untouched either way, so the next Start just retries.
 
 
 class GlossaryManagerDialog(QDialog):
@@ -855,8 +671,10 @@ class GlossaryManagerDialog(QDialog):
             self.status_label.setStyleSheet(f"color: {theme.DANGER};")
             self.status_label.setText(f"✗ {message}")
             return
-        # Keeps any already-open GlossaryDialog for this language pair from
-        # later writing back a glossary_id that no longer exists anywhere.
+        # Keeps this app's own bookkeeping (glossary_id/synced_pairs) from
+        # pointing at a glossary that no longer exists anywhere -- otherwise
+        # sync_glossary_kind_blocking would wrongly believe that language
+        # pair is already synced and skip re-uploading it on the next Start.
         config.clear_glossary_id_if_matches(glossary_id)
         self._refresh()  # re-enables buttons + re-fetches the now-updated list
 
@@ -1589,8 +1407,10 @@ class MainWindow(QMainWindow):
         self.manage_glossary_btn = QPushButton(tr("Glosariusz..."))
         self.manage_glossary_btn.setToolTip(
             tr(
-                "Wymuś własne tłumaczenie konkretnych słów/imion (np. biblijnych) dla obecnie"
-                " wybranej pary językowej -- zamiast tego, co Palabra przetłumaczyłaby sama."
+                "Otwiera plik tekstowy z listą (jedna para \"słowo => tłumaczenie\" na linię) --"
+                " wymusza własne tłumaczenie konkretnych słów/imion (np. biblijnych) dla obecnie"
+                " wybranej pary językowej, zamiast tego, co Palabra przetłumaczyłaby sama."
+                " Synchronizuje się z Palabrą automatycznie przy starcie sesji."
             )
         )
         self.manage_glossary_btn.clicked.connect(self._on_manage_glossary)
@@ -1599,9 +1419,10 @@ class MainWindow(QMainWindow):
         self.manage_profanity_btn = QPushButton(tr("Filtr przekleństw..."))
         self.manage_profanity_btn.setToolTip(
             tr(
-                "Zastępuje wybrane słowa (np. przekleństwa) zamiennikiem -- w tekście i w"
-                " wypowiadanym głosie -- dla obecnie wybranej pary językowej. Osobna lista od"
-                " Glosariusza powyżej."
+                "Otwiera plik tekstowy z listą -- zastępuje wybrane słowa (np. przekleństwa)"
+                " zamiennikiem, w tekście i w wypowiadanym głosie, dla obecnie wybranej pary"
+                " językowej. Osobna lista od Glosariusza powyżej, synchronizuje się z Palabrą"
+                " automatycznie przy starcie sesji."
             )
         )
         self.manage_profanity_btn.clicked.connect(self._on_manage_profanity)
@@ -2212,22 +2033,10 @@ class MainWindow(QMainWindow):
         self._rebuild_voice_combo()
 
     def _on_manage_glossary(self) -> None:
-        source_lang = self.source_lang_combo.currentData()
-        target_lang = self.target_lang_combo.currentData()
-        GlossaryDialog(
-            source_lang, target_lang,
-            self.source_lang_combo.currentText(), self.target_lang_combo.currentText(),
-            self,
-        ).exec()
+        open_glossary_file(self.source_lang_combo.currentData(), self.target_lang_combo.currentData(), kind="custom")
 
     def _on_manage_profanity(self) -> None:
-        source_lang = self.source_lang_combo.currentData()
-        target_lang = self.target_lang_combo.currentData()
-        GlossaryDialog(
-            source_lang, target_lang,
-            self.source_lang_combo.currentText(), self.target_lang_combo.currentText(),
-            self, kind="banned",
-        ).exec()
+        open_glossary_file(self.source_lang_combo.currentData(), self.target_lang_combo.currentData(), kind="banned")
 
     def _on_mic_selection_changed(self, _index: int) -> None:
         # Repopulating the channel combo for the newly selected device must
@@ -2500,6 +2309,15 @@ class MainWindow(QMainWindow):
         output_device = self.output_combo.currentData()
         source_lang = self.source_lang_combo.currentData()
         target_lang = self.target_lang_combo.currentData()
+
+        # Glosariusz/Filtr przekleństw are now plain .txt files (see
+        # open_glossary_file) with no in-app "Save" step to trigger a sync
+        # from -- this is the one point that's guaranteed to run before
+        # every session, so it's where whatever's currently in each file
+        # actually goes live. A no-op (no network call) when nothing
+        # changed since the last successful sync, which is the common case.
+        sync_glossary_kind_blocking(creds.api_key, source_lang, target_lang, "custom")
+        sync_glossary_kind_blocking(creds.api_key, source_lang, target_lang, "banned")
 
         resolved_voice = self._resolve_selected_voice()
         if resolved_voice is None:
