@@ -49,7 +49,6 @@ CHUNK_SAMPLES = int(INPUT_RATE * CHUNK_MS / 1000)
 CHUNK_BYTES = CHUNK_SAMPLES * 2  # int16 = 2 bytes/sample
 BYTES_PER_MS = INPUT_RATE * CHANNELS * 2 / 1000
 TRAILING_SILENCE_MS = 2000  # appended so the server can always finalize the last segment
-MAX_MIC_BACKLOG_BYTES = CHUNK_BYTES * 2  # ~640ms -- see MicStream.chunks()
 STREAM_OPEN_RETRY_ATTEMPTS = 5
 STREAM_OPEN_RETRY_DELAY_SECONDS = 1.0
 # See MicStream.level/OutputSink.level: a live PortAudio callback fires
@@ -406,7 +405,15 @@ class MicStream:
     """
 
     def __init__(self, device: int | None = None, channel: int | None = None):
-        self._q: queue.Queue[bytes] = queue.Queue(maxsize=100)
+        # Unbounded -- see OutputSink.__init__ for the same reasoning on the
+        # playback side. A bounded queue here used to silently drop captured
+        # mic audio once a stall (a network hiccup, a blocking send_audio()
+        # call) let it fill up, meaning the server never even received those
+        # words at all. put_nowait() never blocks regardless of maxsize, so
+        # there was never a real-time-callback-safety reason for the cap --
+        # only a memory-bound one, and a stall's worth of raw PCM is trivial
+        # memory (~32KB/s at 16kHz mono).
+        self._q: queue.Queue[bytes] = queue.Queue()
         self._paused = threading.Event()
         self._gain = 1.0
         self._gate_threshold = 0.0
@@ -506,10 +513,7 @@ class MicStream:
                 self._level = min(1.0, int(np.abs(np.frombuffer(data, dtype=np.int16)).max()) / 32767)
             else:
                 self._level = 0.0
-            try:
-                self._q.put_nowait(data)
-            except queue.Full:
-                pass  # drop audio rather than block the audio-driver thread
+            self._q.put_nowait(data)  # unbounded -- see __init__, never drop captured audio
 
         return _on_audio
 
@@ -665,24 +669,24 @@ class MicStream:
             except queue.Empty:
                 await asyncio.sleep(0.005)
                 continue
-            # Drain whatever else is already queued in this same pass, then
-            # cap the result: something can briefly stall consumption even
-            # outside of an explicit pause (a network hiccup, or set_task()
-            # sharing the same websocket send when the voice is changed
-            # mid-session) while the mic callback keeps pushing in real
-            # time. Draining one item per loop iteration would still replay
-            # that backlog as a burst of near-instant yields once caught up
-            # -- capping it here means at most one chunk's worth of stale
-            # audio gets sent late, instead of everything piled up during
-            # the stall.
+            # Drain whatever else is already queued in this same pass:
+            # something can briefly stall consumption even outside of an
+            # explicit pause (a network hiccup, or set_task() sharing the
+            # same websocket send when the voice is changed mid-session)
+            # while the mic callback keeps pushing in real time. This used
+            # to also cap the result and discard everything but the most
+            # recent chunk once a stall's backlog grew past ~640ms -- told
+            # explicitly that's unacceptable (the server would never even
+            # receive whatever was said during the stall). Never dropped
+            # now: RealtimePacer.tick() already self-corrects a shortfall
+            # by resyncing to "now" on its own the moment it notices it's
+            # behind (see its docstring), so an unbounded `pending` still
+            # drains at real-time pace afterwards -- just later, not lost.
             while True:
                 try:
                     pending += self._q.get_nowait()
                 except queue.Empty:
                     break
-            if len(pending) > MAX_MIC_BACKLOG_BYTES:
-                pending = pending[-CHUNK_BYTES:]
-                pacer.resync()  # we just dropped a backlog -- resync instead of pacing off a stale anchor
             while len(pending) >= CHUNK_BYTES:
                 await pacer.tick()
                 yield self._apply_gain(pending[:CHUNK_BYTES])
