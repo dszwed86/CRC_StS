@@ -565,24 +565,34 @@ class TranslationRunner:
                     # most of 0.3's latency win while giving pauses a bit more
                     # room before the server calls a segment done.
                     silence_threshold=0.4,
+                    # REVERTED (see below) -- left here so the next person
+                    # who considers disabling sentence_splitter again knows
+                    # why it was tried and reverted, not just that it wasn't:
+                    #
                     # The server's own sentence_splitter (on by default) was
                     # measured via a real A/B test to force-split long
                     # sentences mid-clause with no pause anywhere near the
-                    # cut -- reproduced identically across every
-                    # silence_threshold/tempo variant tried, so it's a
-                    # length/grammar-driven split, not a silence one, and
-                    # silence_threshold can't fix it. The independently-
-                    # translated halves then sometimes recombined into a
-                    # duplicated, ungrammatical seam, and -- worse -- a
-                    # subjectless second half occasionally got translated in
-                    # the wrong gender/person (e.g. a sentence about "she"
-                    # split after the subject came back 1st-person-masculine
-                    # in Polish). Disabling it removed both defects
-                    # completely on the same test sentences, at the cost of
-                    # longer confirmation waits on the now-uncut long
-                    # sentences (worth it: correctness over a few extra
-                    # seconds of latency on just the longest sentences).
-                    transcription={"sentence_splitter": {"enabled": False}},
+                    # cut, occasionally producing a duplicated, ungrammatical
+                    # seam or (once) a wrong-gender/-person translation on
+                    # the subjectless second half. Disabling it
+                    # (transcription={"sentence_splitter": {"enabled":
+                    # False}}) removed both defects on that test -- but a
+                    # real live user then hit a MUCH worse failure mode on a
+                    # genuinely long, pause-free run of speech (several
+                    # sentences spoken back-to-back with no real gap,
+                    # sermon-style): with nothing left to close a segment
+                    # except silence, the segment just kept growing --
+                    # confirmed via a real A/B replay of the exact reported
+                    # text: time-to-first-audio went from ~8s (splitter on)
+                    # to 16.3s (splitter off), with 102 partial-text
+                    # revisions flickering on screen the whole time and dead
+                    # air on the actual translated audio. For a LIVE
+                    # broadcast tool, that stall is a worse failure than an
+                    # occasional awkward split -- reverted to the server
+                    # default (leave sentence_splitter untouched) on that
+                    # basis. If revisiting this, look for a length/duration
+                    # cap on sentence_splitter itself (not just on/off) --
+                    # none was documented as of this test.
                 )
                 # Widen the server's internal TTS output queue beyond
                 # build_task()'s implicit (tight) default -- not exposed as
