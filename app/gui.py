@@ -476,11 +476,14 @@ class GlossaryDialog(QDialog):
 
     There's no server-side "edit" available for an existing glossary
     (confirmed against the real API -- see glossary.py's own docstring):
-    every Save deletes whatever glossary previously represented this
+    every sync deletes whatever glossary previously represented this
     language pair (if any) and uploads a fresh one with the current list.
-    Local edits (Dodaj/Usuń) are saved to disk immediately so they
-    survive closing the dialog without Save, but only take effect in
-    actual translations once pushed -- see the status label.
+    Local edits (Dodaj/Usuń) are saved to disk immediately so they survive
+    closing the dialog, and sync to Palabra automatically when the dialog
+    closes if anything changed (see closeEvent) -- no separate "Save"
+    button/step to forget, which was the exact confusion a real user
+    reported ("dodaję słowo i ono znika" -- it was saved locally but never
+    pushed, because the manual save step was easy to miss).
     """
 
     def __init__(
@@ -573,11 +576,8 @@ class GlossaryDialog(QDialog):
         open_file_btn.clicked.connect(self._on_open_file)
 
         save_row = QHBoxLayout()
-        self.save_btn = QPushButton(tr("Zapisz w Palabra"))
-        self.save_btn.clicked.connect(self._on_save)
         close_btn = QPushButton(tr("Zamknij"))
         close_btn.clicked.connect(self.close)
-        save_row.addWidget(self.save_btn)
         save_row.addWidget(open_file_btn)
         save_row.addWidget(manage_btn)
         save_row.addStretch()
@@ -615,9 +615,7 @@ class GlossaryDialog(QDialog):
     def _update_status_label(self) -> None:
         if self._dirty:
             self.status_label.setStyleSheet(f"color: {theme.WARNING};")
-            self.status_label.setText(
-                tr('Niezapisane zmiany -- kliknij "Zapisz w Palabra", żeby zaczęły obowiązywać.')
-            )
+            self.status_label.setText(tr("Niezapisane zmiany -- zostaną wysłane po zamknięciu tego okna."))
         elif self._glossary_id is not None:
             self.status_label.setStyleSheet(f"color: {theme.SUCCESS};")
             self.status_label.setText(tr("Aktywny w Palabra."))
@@ -653,14 +651,16 @@ class GlossaryDialog(QDialog):
         self._refresh_list()
         self._update_status_label()
 
-    def _on_save(self) -> None:
+    def _start_sync(self) -> None:
+        """Pushes the current pairs to Palabra -- called automatically from
+        closeEvent when there are unsaved changes (see class docstring for
+        why there's no manual "Save" button/step anymore)."""
         creds = config.load_credentials()
         if not creds.api_key:
-            QMessageBox.warning(
-                self, tr("Brak klucza"), tr("Ustaw klucz API w Ustawieniach przed zapisem glosariusza.")
-            )
+            # No key set: local edits are already safe on disk (see
+            # _on_add/_on_remove), just can't reach Palabra yet -- closeEvent
+            # lets the window close anyway rather than blocking the user.
             return
-        self.save_btn.setEnabled(False)
         # Also block local edits for the duration of the save: GlossarySaver
         # captures a snapshot of self._pairs at dispatch time below, so an
         # edit made while the save is in flight would be silently lost --
@@ -687,7 +687,6 @@ class GlossaryDialog(QDialog):
         thread.start()
 
     def _on_save_finished(self, ok: bool, message: str, new_glossary_id: object, sent_pairs: list[tuple[str, str]]) -> None:
-        self.save_btn.setEnabled(True)
         self.add_btn.setEnabled(True)
         self.remove_btn.setEnabled(True)
         self._saver_worker = None
@@ -712,11 +711,16 @@ class GlossaryDialog(QDialog):
         GlossaryManagerDialog(self).exec()
 
     def closeEvent(self, event) -> None:
-        # Mirrors SettingsDialog.closeEvent: waits for the save thread so
-        # closing (or reopening) the dialog mid-save can't let a stale,
-        # already-superseded glossary_id get written back to disk -- which
-        # would silently orphan whichever glossary the in-flight save was
-        # about to make active (see app/glossary.py's module docstring).
+        # Auto-sync on close instead of requiring a manual "Save" step (see
+        # class docstring) -- only kicks off if nothing is already in flight
+        # and there's actually something unsent.
+        if self._saver_thread is None and self._dirty:
+            self._start_sync()
+        # Waits for the save thread so closing (or reopening) the dialog
+        # mid-save can't let a stale, already-superseded glossary_id get
+        # written back to disk -- which would silently orphan whichever
+        # glossary the in-flight save was about to make active (see
+        # app/glossary.py's module docstring).
         if self._saver_thread is not None:
             thread = self._saver_thread
             wait_loop = QEventLoop()
