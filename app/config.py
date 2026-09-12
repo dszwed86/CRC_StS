@@ -346,6 +346,38 @@ def _write_glossary_txt(path: Path, pairs: list[tuple[str, str]]) -> None:
 _UNSET = object()
 
 
+# Shipped with the app (not user data) so a fresh install's profanity filter
+# has a sensible starting point instead of an empty list -- seeded into the
+# real .txt file the first time it's loaded for a Polish-source pair (see
+# load_glossary_entries below), then left entirely alone: editing or deleting
+# entries afterward is never overwritten back to this default. Common
+# vulgarities plus their most frequent inflected forms, both lowercase and
+# Capitalized (sentence-initial) forms -- not exhaustive, just a starting
+# point; the .txt file is freely editable afterward (see glossary_txt_path).
+DEFAULT_BANNED_WORDS_PL: list[tuple[str, str]] = [
+    (w, "*****")
+    for w in (
+        "kurwa", "Kurwa", "kurwy", "kurwo", "kurwę", "kurwie", "kurwami", "kurwach",
+        "chuj", "Chuj", "chuja", "chuju", "chujowi", "chujem", "chuje", "chujów",
+        "chujowy", "chujowa", "chujowe",
+        "huj", "Huj", "huja", "hujem",
+        "pierdolić", "pierdole", "pierdolę", "pierdolisz", "pierdoli", "pierdolimy",
+        "pierdolicie", "pierdolą", "pierdolony", "pierdolona", "pierdolone",
+        "spierdalaj", "Spierdalaj", "spierdalać", "wypierdalaj", "Wypierdalaj",
+        "popierdolone", "popierdolony", "popierdolona",
+        "jebać", "jebię", "jebę", "jebiesz", "jebie", "jebią", "jebany", "jebana", "jebane",
+        "pojebany", "pojebana", "pojebane", "zjebać", "zjebany", "zjebana", "zjebane", "wyjebane",
+        "pizda", "Pizda", "pizdę", "pizdy", "pizdo",
+        "cipa", "Cipa", "cipy", "cipę",
+        "dziwka", "Dziwka", "dziwki",
+        "skurwysyn", "Skurwysyn", "skurwysyny", "skurwysynu",
+        "gówno", "Gówno", "gówna", "gównem",
+        "gnojek", "gnoju", "Gnoju",
+        "sukinsyn", "Sukinsyn",
+    )
+]
+
+
 def load_glossary_entries(
     source_lang: str, target_lang: str, kind: str = "custom"
 ) -> tuple[list[tuple[str, str]], str | None, list[tuple[str, str]]]:
@@ -355,7 +387,8 @@ def load_glossary_entries(
     GLOSSARY_PATH) for one language pair/kind -- the caller (GlossaryDialog)
     compares the pairs against synced_pairs to know whether it's showing
     unsaved changes, instead of always assuming "just saved" on open.
-    Returns ([], None, []) if nothing saved yet.
+    Returns ([], None, []) if nothing saved yet (except kind="banned" with a
+    Polish source -- see DEFAULT_BANNED_WORDS_PL above).
 
     One-time migration: an existing install's "custom" pairs were
     previously stored inline in GLOSSARY_PATH's JSON instead of a .txt file
@@ -382,6 +415,8 @@ def load_glossary_entries(
                     legacy_pairs = _parse_pairs(entry.get("pairs"))
                     if legacy_pairs:
                         _write_glossary_txt(txt_path, legacy_pairs)
+    if kind == "banned" and source_lang == "pl" and not txt_path.exists():
+        _write_glossary_txt(txt_path, DEFAULT_BANNED_WORDS_PL)
     pairs = _read_glossary_txt(txt_path)
     return pairs, glossary_id, synced_pairs
 
