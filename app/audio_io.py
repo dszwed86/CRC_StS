@@ -189,6 +189,20 @@ def preload_file(path: str | Path) -> None:
     with _preload_lock:
         if key in _preload_events:
             return
+        # Only one file is ever "selected" in the GUI at a time -- drop any
+        # previous entry rather than accumulating one per file ever picked.
+        # Without this, browsing several candidate files before starting a
+        # session (a normal thing to do) pinned each one's full decoded PCM
+        # in memory for the rest of the process's life, since nothing but a
+        # matching FileStream (which only the ONE file actually started ever
+        # gets) pops an entry back out. Harmless if a FileStream for the
+        # previous path is mid-decode right now: it already popped its own
+        # event out of _preload_events before waiting on it, so clearing
+        # here can at worst wipe an about-to-be-consumed _preload_results
+        # entry, which just makes that FileStream fall back to its own
+        # synchronous decode (see _decode() below) -- not a crash.
+        _preload_events.clear()
+        _preload_results.clear()
         event = threading.Event()
         _preload_events[key] = event
 
@@ -216,9 +230,17 @@ def rescan_devices() -> None:
     """Forces PortAudio to re-scan hardware (e.g. a mic plugged in after startup).
 
     sounddevice/PortAudio snapshot the device list at initialization; re-running
-    init is the standard workaround to pick up hardware changes. Safe to call
-    anytime no stream is open.
+    init is the standard workaround to pick up hardware changes. Only safe
+    while no PortAudio stream is open -- callers are expected to have closed
+    any MicStream/OutputSink of their own first (see e.g. MainWindow's
+    _on_refresh_devices, which closes/reopens its mic level-meter preview
+    around this call).
     """
+    # play_test_tone()'s sd.play() is a separate, unmanaged global stream this
+    # module doesn't otherwise track -- stop() it first (a no-op if nothing is
+    # playing) so a still-running test tone can't be caught mid-playback when
+    # _terminate() tears down the whole PortAudio session under it.
+    sd.stop()
     sd._terminate()
     sd._initialize()
 
@@ -481,8 +503,17 @@ class MicStream:
         return self
 
     def __exit__(self, *exc_info) -> None:
-        self._stream.stop()
-        self._stream.close()
+        # try/finally: this now runs far more often than "once per session at
+        # clean shutdown" (its original, low-risk use) -- the mic level-meter
+        # preview (see MainWindow._stop_mic_preview) calls it on every device/
+        # channel change while idle, every few seconds via the auto device
+        # refresh, and around every session start/stop. A stop() failure
+        # (e.g. the device was physically unplugged) must not skip close()
+        # and leak the underlying stream handle.
+        try:
+            self._stream.stop()
+        finally:
+            self._stream.close()
 
     async def switch_device(self, new_device: int | None, channel: int | None) -> None:
         """Swaps to a different physical input device (and/or which of its

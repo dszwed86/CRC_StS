@@ -565,6 +565,24 @@ class TranslationRunner:
                     # most of 0.3's latency win while giving pauses a bit more
                     # room before the server calls a segment done.
                     silence_threshold=0.4,
+                    # The server's own sentence_splitter (on by default) was
+                    # measured via a real A/B test to force-split long
+                    # sentences mid-clause with no pause anywhere near the
+                    # cut -- reproduced identically across every
+                    # silence_threshold/tempo variant tried, so it's a
+                    # length/grammar-driven split, not a silence one, and
+                    # silence_threshold can't fix it. The independently-
+                    # translated halves then sometimes recombined into a
+                    # duplicated, ungrammatical seam, and -- worse -- a
+                    # subjectless second half occasionally got translated in
+                    # the wrong gender/person (e.g. a sentence about "she"
+                    # split after the subject came back 1st-person-masculine
+                    # in Polish). Disabling it removed both defects
+                    # completely on the same test sentences, at the cost of
+                    # longer confirmation waits on the now-uncut long
+                    # sentences (worth it: correctness over a few extra
+                    # seconds of latency on just the longest sentences).
+                    transcription={"sentence_splitter": {"enabled": False}},
                 )
                 # Widen the server's internal TTS output queue beyond
                 # build_task()'s implicit (tight) default -- not exposed as

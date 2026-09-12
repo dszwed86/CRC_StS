@@ -2001,6 +2001,15 @@ class MainWindow(QMainWindow):
                 available = screen.availableGeometry()
                 width = min(width, available.width() - 40)
                 height = min(height, available.height() - 80)
+            # Floor against a corrupted/negative saved value (e.g. a
+            # hand-edited or otherwise malformed app_settings.json) -- "and"
+            # above only rules out 0/None, not negative numbers. Deliberately
+            # far below any real default: the window is meant to be free to
+            # shrink (see the settings QScrollArea's own comment on why there
+            # is no setMinimumHeight), so this must never clip a genuinely
+            # small resize, only nonsense.
+            width = max(width, 300)
+            height = max(height, 300)
             self.resize(width, height)
 
     def _save_app_settings(self) -> None:
