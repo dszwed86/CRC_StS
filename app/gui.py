@@ -1604,13 +1604,22 @@ class MainWindow(QMainWindow):
         # Not added to this form -- see "Zaawansowane" below.
 
         self.church_style_check = QCheckBox(tr("Styl kościelny"))
-        self.church_style_check.setChecked(True)
+        # Off by default (was on) -- a real A/B test on the same sentence
+        # showed it measurably increases visible partial-text "flicker"
+        # (18 vs 13 non-append revisions before the text settles) on top of
+        # its already-known cost of occasionally mistranslating gender/person
+        # on a subjectless sentence fragment (see translation_session.py's
+        # sentence_splitter comment). Its real benefit (idioms/numerals
+        # translated in the church register, e.g. "wiernych" instead of the
+        # generic "członków") is still there when turned on -- just no
+        # longer forced on every session by default.
         self.church_style_check.setToolTip(
             tr(
                 "Dostraja tłumaczenie pod rejestr kazań/treści religijnych (Palabra: style="
                 "church_catholic) -- np. poprawnie oddaje idiomy biblijne i liczebniki, zamiast"
-                " dosłownego tłumaczenia słowo w słowo. Zmierzone: bez dodatkowego opóźnienia."
-                " Zmienia znaczną część zdań stylistycznie, więc wyłącz dla świeckich sesji."
+                " dosłownego tłumaczenia słowo w słowo. Koszt: zauważalnie więcej rewizji"
+                " widocznego tekstu w trakcie tłumaczenia (zmierzone: +38% na tym samym zdaniu)"
+                " oraz mimo braku dodatkowego opóźnienia audio."
             )
         )
         # Not added to this form -- see "Zaawansowane" below.
