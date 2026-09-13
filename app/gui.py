@@ -992,10 +992,10 @@ FILE_SWAP_TIMEOUT_SECONDS = 3.0
 # short string + a couple of floats/bools), so keeping a full heavy
 # workday's worth of them (measured: ~2,000/hour of continuous speech)
 # costs a few MB, not the hundreds of MB the log's own QPlainTextEdit
-# widget uses per line -- generous on purpose, since the old cap of 300
-# meant switching the log filter mid-session silently discarded almost
-# all of a long session's transcript.
-MAX_TRANSCRIPT_HISTORY_ENTRIES = 20_000
+# widget uses per line. Uncapped (was 300, then 20,000): told explicitly
+# that ANY silent discarding of transcript text is unacceptable, even a
+# generous cap that would only bite on a multi-day session -- see the
+# identical "never drop" reasoning in audio_io.py's OutputSink/MicStream.
 
 # MainWindow's default open height for the settings scroll area (see
 # settings_scroll's construction): comfortably fits the collapsed default
@@ -2647,10 +2647,8 @@ class MainWindow(QMainWindow):
         # Kept so a newly-opened overlay can be backfilled (see _open_overlay)
         # instead of starting empty if it's opened mid-session, and so the log
         # filter/tag toggles can retroactively re-render already-shown lines
-        # (see _rebuild_log). Capped (see MAX_TRANSCRIPT_HISTORY_ENTRIES)
-        # since a long session could otherwise accumulate an unbounded list.
+        # (see _rebuild_log). Uncapped -- see this list's declaration.
         self._transcript_history.append(event)
-        del self._transcript_history[:-MAX_TRANSCRIPT_HISTORY_ENTRIES]
         if self._overlay is not None:
             self._overlay.on_transcript(event)  # overlay applies its own, independent filter
         if not self._event_passes_log_filter(event):
